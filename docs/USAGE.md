@@ -167,13 +167,16 @@ $ logilens --lang en seq --input 0110 examples/moore_fsm.circ
 
 Writes the complete analysis: the sections of `analyze`, the lint and specification results, and the sequential part for sequential circuits.
 
-`logilens report [-f rich|md|html|json] [-o PATH] [--spec FILE] [--map SPEC=OUT,...] [--only GATES] [--tie|--no-tie] [--no-image] [--circuit NAME] FILE`
+`logilens report [-f rich|md|html|json] [-o PATH] [--spec FILE] [--map SPEC=OUT,...] [--only GATES] [--tie|--no-tie] [--no-image] [--input BITS] [--circuit NAME] FILE`
 
 | Option | Meaning |
 |---|---|
 | `-f`, `--format` | `rich` (terminal, the default), `md` (Markdown), `html`, or `json`. |
 | `-o`, `--output PATH` | Write the report to this file instead of the terminal. |
-| `--no-image` | HTML only. Do not embed the drawing of the circuit, which needs Java. |
+| `--no-image` | HTML only. Skip the circuit drawing. It needs Java. |
+| `--input BITS` | Sequential circuits: input sequence for the timing diagram, as in `seq --input`. |
+
+The HTML report is one self-contained file that follows the system light or dark theme. It draws the Karnaugh maps with the groups outlined, the timing diagram and the state graph as pictures, and folds long tables away. The Markdown report keeps tables readable on GitHub: long ones are collapsed, and the state graph is a Mermaid diagram that GitHub renders.
 
 ```text
 $ logilens --lang en report -f md -o report.md --spec examples/converter.spec.txt examples/converter_nand_nor.circ

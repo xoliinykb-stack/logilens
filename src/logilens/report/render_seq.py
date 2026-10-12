@@ -18,6 +18,7 @@ from rich.text import Text
 
 from logilens.i18n import t
 from logilens.i18n.glossary import term
+from logilens.report.svg import state_graph_svg, timing_svg
 
 
 def _cap(text: str) -> str:
@@ -136,11 +137,19 @@ def markdown(data: dict[str, Any] | None, lang: str) -> list[str]:
     out = [f"- **{k}**: {v}" for k, v in summary_rows(data, lang)] + [""]
     rows = ((data.get("analysis") or {}).get("table") or {}).get("rows") or []
     if rows:
-        out += [f"#### {_cap(term('transition_table', lang))}", "", "| " + t("seq.state", lang) + " | "
-                + t("seq.next", lang) + " | " + t("seq.out", lang) + " |", "|---|---|---|"]
-        out += [f"| {r.get('name')} | {' '.join(map(str, r.get('next', [])))} | "
-                f"{' '.join(map(str, r.get('outputs', [])))} |" for r in rows]
+        cols = next_columns(data, lang)
+        header = [t("seq.state", lang), *cols, t("seq.out", lang)]
+        out += [f"#### {_cap(term('transition_table', lang))}", "", "| " + " | ".join(header) + " |",
+                "|" + "---|" * len(header)]
+        for r in rows:
+            nxt = list(map(str, r.get("next", [])))
+            cells = nxt if len(cols) == len(nxt) else [" ".join(nxt)]
+            out.append(f"| **{r.get('name')}** | " + " | ".join(f"`{c}`" for c in cells)
+                       + f" | `{' '.join(map(str, r.get('outputs', [])))}` |")
         out.append("")
+    mermaid = mermaid_graph(data.get("fsm") or {})
+    if mermaid:
+        out += [f"#### {t('seq.graph', lang)}", "", "```mermaid", mermaid, "```", ""]
     timing = data.get("timing") or {}
     if timing.get("diagram"):
         out += [f"#### {t('seq.timing', lang)}", "", "```", timing["diagram"], "```", ""]
@@ -156,14 +165,63 @@ def html(data: dict[str, Any] | None, lang: str) -> str:
     out = [f"<dl class='kv'>{kv}</dl>"]
     rows = ((data.get("analysis") or {}).get("table") or {}).get("rows") or []
     if rows:
-        body = "".join(f"<tr><td>{escape(str(r.get('name')))}</td><td>{escape(' '.join(map(str, r.get('next', []))))}"
-                       f"</td><td>{escape(' '.join(map(str, r.get('outputs', []))))}</td></tr>" for r in rows)
-        out.append(f"<h4>{escape(_cap(term('transition_table', lang)))}</h4><table><thead><tr>"
-                   f"<th>{escape(t('seq.state', lang))}</th><th>{escape(t('seq.next', lang))}</th>"
-                   f"<th>{escape(t('seq.out', lang))}</th></tr></thead><tbody>{body}</tbody></table>")
+        width = len(rows[0].get("next", []))
+        cols = next_columns(data, lang)
+        head = "".join(f"<th>{escape(c)}</th>" for c in cols)
+        body = ""
+        for r in rows:
+            nxt = list(map(str, r.get("next", [])))
+            cells = "".join(f"<td><code>{escape(v)}</code></td>" for v in (nxt if len(cols) == width else [" ".join(nxt)]))
+            body += (f"<tr><td><b>{escape(str(r.get('name')))}</b></td>{cells}"
+                     f"<td><code>{escape(' '.join(map(str, r.get('outputs', []))))}</code></td></tr>")
+        out.append(f"<h4>{escape(_cap(term('transition_table', lang)))}</h4><div class='scroll'><table><thead><tr>"
+                   f"<th>{escape(t('seq.state', lang))}</th>{head}"
+                   f"<th>{escape(t('seq.out', lang))}</th></tr></thead><tbody>{body}</tbody></table></div>")
     timing = data.get("timing") or {}
-    if timing.get("diagram"):
-        out.append(f"<h4>{escape(t('seq.timing', lang))}</h4><pre>{escape(timing['diagram'])}</pre>")
+    if timing.get("states"):
+        fsm = data.get("fsm") or {}
+        picture = timing_svg(timing, fsm.get("inputs") or [], fsm.get("outputs") or [], t("seq.state", lang))
+        out.append(f"<h4>{escape(t('seq.timing', lang))}</h4><div class='scroll'>{picture}</div>")
+    graph = state_graph_svg(data.get("fsm") or {})
+    if graph:
+        out.append(f"<h4>{escape(t('seq.graph', lang))}</h4><div class='graph'>{graph}</div>")
     if data.get("dot"):
-        out.append(f"<details><summary>Graphviz</summary><pre>{escape(data['dot'])}</pre></details>")
+        out.append(f"<details><summary>Graphviz (.dot)</summary><pre>{escape(data['dot'])}</pre></details>")
     return "".join(out)
+
+
+def next_columns(data: dict[str, Any], lang: str) -> list[str]:
+    """Headers of the next-state columns: one per input combination (x=0, x=1, ...) when they line up."""
+    rows = ((data.get("analysis") or {}).get("table") or {}).get("rows") or []
+    inputs = (data.get("fsm") or {}).get("inputs") or []
+    width = len(rows[0].get("next", [])) if rows else 0
+    if inputs and width == 2 ** len(inputs):
+        return [f"{''.join(inputs)}={k:0{len(inputs)}b}" for k in range(width)]
+    return [t("seq.next", lang)] if width else []
+
+
+def mermaid_graph(fsm: dict[str, Any]) -> str:
+    """State graph as a Mermaid ``stateDiagram-v2`` (GitHub renders it in Markdown)."""
+    transitions = fsm.get("transitions") or []
+    if not transitions:
+        return ""
+    moore = fsm.get("kind") == "moore"
+    ids = {s.get("code", ""): f"S{k}" for k, s in enumerate(fsm.get("states") or [])}
+    names = {s.get("code", ""): s.get("name") or s.get("code", "") for s in fsm.get("states") or []}
+    lines = ["stateDiagram-v2", "    direction LR"]
+    outs: dict[str, str] = {}
+    edges: dict[tuple[str, str], list[str]] = {}
+    for tr in transitions:
+        out = "".join(map(str, tr.get("outputs") or []))
+        outs.setdefault(tr["state"], out)
+        label = str(tr.get("input", "")) if moore else f"{tr.get('input', '')}/{out}"
+        edges.setdefault((tr["state"], tr["next"]), []).append(label)
+    for code, sid in ids.items():
+        text = f"{names[code]} / {outs[code]}" if moore and code in outs else names[code]
+        lines.append(f'    state "{text}" as {sid}')
+    if fsm.get("initial") in ids:
+        lines.append(f"    [*] --> {ids[fsm['initial']]}")
+    for (a, b), labels in edges.items():
+        if a in ids and b in ids:
+            lines.append(f"    {ids[a]} --> {ids[b]} : {','.join(labels)}")
+    return "\n".join(lines)

@@ -169,6 +169,9 @@ def report_cmd(
     only: OnlyOpt = None,
     tie: TieOpt = None,
     no_image: Annotated[bool, typer.Option("--no-image", help="HTML: do not embed the Logisim drawing.")] = False,
+    input_sequence: Annotated[str | None, typer.Option(
+        "--input", metavar="BITS", help="Sequential circuits: input sequence for the timing diagram, e.g. 0110.")]
+    = None,
     circuit: CircuitOpt = None,
 ) -> None:
     """Write the full analysis as one report: in the terminal or as Markdown, HTML or JSON.
@@ -182,7 +185,8 @@ def report_cmd(
         from logilens.analysis import analyze
 
         opts = st.options(spec=spec, map_overrides=list(map_ or []), only=only, tie_duplicate_labels=tie,
-                          circuit=circuit, render_image=fmt == "html" and not no_image)
+                          circuit=circuit, render_image=fmt == "html" and not no_image,
+                          input_sequence=input_sequence)
         report = analyze(file, opts)
         _emit(st, report, fmt, output)
         return EXIT_FINDINGS if findings(report) else EXIT_OK

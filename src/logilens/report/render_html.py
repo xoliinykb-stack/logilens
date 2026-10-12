@@ -5,12 +5,10 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 
-from logilens.core.logic_types import KMapView
 from logilens.i18n import issue_fix, issue_message, t
-from logilens.kmap.groups import cells_of_group
-from logilens.kmap.render_text import legend_lines
 from logilens.report import render_seq
 from logilens.report.model import FormResult, GroupReport, Report, Verdict
+from logilens.report.svg import kmap_svg
 from logilens.report.text import (
     VERDICT_ICON,
     best_form,
@@ -25,53 +23,76 @@ from logilens.report.text import (
     verdict_sentence,
 )
 
-COLORS = {
-    "red": "#e5484d", "green": "#30a46c", "blue": "#3e63dd", "magenta": "#d6409f", "cyan": "#0894b3",
-    "yellow": "#c99a00", "bright_red": "#ff6b6b", "bright_green": "#2fbf71", "bright_blue": "#4c8dff",
-    "bright_magenta": "#b65bd6", "bright_cyan": "#14b8c4", "dark_orange": "#e8730c", "purple": "#7c3aed",
-    "spring_green3": "#12a37f", "deep_pink3": "#c2185b", "gold3": "#b8860b",
-}
 VERDICT_CLASS = {
     Verdict.OPTIMAL: "ok", Verdict.IMPROVABLE: "warn", Verdict.BEYOND_TWO_LEVEL: "beyond",
     Verdict.UNPROVEN: "unproven", Verdict.NOT_APPLICABLE: "na",
 }
 
 CSS = """
-:root{--bg:#f7f7f9;--card:#fff;--fg:#1d1d24;--muted:#6b6b78;--line:#e3e3ea;--accent:#7c3aed;
---ok:#1f9d55;--warn:#c27c0e;--bad:#d64545;--beyond:#b03fb0;--unproven:#2b7bb9;--na:#888;--code:#f1f0f6}
-@media (prefers-color-scheme:dark){:root{--bg:#121218;--card:#1b1b24;--fg:#e8e8f0;--muted:#9a9aab;--line:#2c2c3a;
---accent:#a78bfa;--code:#23232f}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
-font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-main{max-width:1180px;margin:0 auto;padding:24px 16px 64px}
-h1{font-size:24px;margin:0 0 4px}h2{font-size:19px;margin:32px 0 12px;border-bottom:1px solid var(--line);
-padding-bottom:6px}h3{font-size:17px;margin:0 0 10px}h4{font-size:15px;margin:18px 0 8px;color:var(--muted)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0;
-box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.brand{color:var(--accent);font-weight:700}.muted{color:var(--muted)}
-.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 18px}.kv dt{color:var(--muted)}.kv dd{margin:0}
-table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:6px 9px;border-bottom:1px solid var(--line);
-text-align:left;vertical-align:top}th{color:var(--muted);font-weight:600}td.num,th.num{text-align:right;
-font-variant-numeric:tabular-nums}
-.pill{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;font-weight:700;color:#fff}
-.sev-error{background:var(--bad)}.sev-warning{background:var(--warn)}.sev-info{background:var(--unproven)}
-.badge{display:inline-block;padding:3px 12px;border-radius:8px;font-weight:700;color:#fff}
+:root{--bg:#f6f6f8;--card:#fff;--fg:#1c1c22;--muted:#6a6a78;--line:#e4e4ec;--accent:#6d4aff;--accent-soft:#efeaff;
+--ok:#1f9d55;--warn:#c27c0e;--bad:#d64545;--beyond:#b03fb0;--unproven:#2b7bb9;--na:#8a8a96;--code:#f2f1f7;
+--shadow:0 1px 2px rgba(20,20,40,.05),0 4px 16px rgba(20,20,40,.04)}
+@media (prefers-color-scheme:dark){:root{--bg:#111116;--card:#191921;--fg:#e9e9f1;--muted:#9898a8;--line:#2a2a36;
+--accent:#a48bff;--accent-soft:#2a2440;--code:#20202a;--shadow:none}}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:64px}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",
+Inter,Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+nav.top{position:sticky;top:0;z-index:5;background:color-mix(in srgb,var(--bg) 82%,transparent);
+backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav.top div{max-width:1180px;margin:0 auto;padding:10px 20px;display:flex;gap:6px;align-items:center;overflow-x:auto}
+nav.top b{color:var(--accent);margin-right:10px;white-space:nowrap}
+nav.top a{color:var(--muted);text-decoration:none;font-size:13.5px;padding:4px 10px;border-radius:999px;white-space:nowrap}
+nav.top a:hover{background:var(--accent-soft);color:var(--fg)}
+main{max-width:1180px;margin:0 auto;padding:24px 20px 72px}
+h1{font-size:26px;line-height:1.2;margin:0}h2{font-size:19px;margin:40px 0 12px}
+h3{font-size:17px;margin:0 0 12px}h4{font-size:13px;margin:22px 0 10px;color:var(--muted);text-transform:uppercase;
+letter-spacing:.04em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:12px 0;
+box-shadow:var(--shadow)}
+.hero{display:grid;gap:18px}.hero .title{display:flex;flex-wrap:wrap;gap:12px 16px;align-items:center}
+.hero .file{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:var(--muted)}
+.muted{color:var(--muted)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:5px 20px;margin:0}.kv dt{color:var(--muted)}.kv dd{margin:0}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.tile{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--bg)}
+.tile .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.tile .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+.tile .s{font-size:12.5px;color:var(--muted)}
+.tile.ok .v{color:var(--ok)}.tile.warn .v{color:var(--warn)}.tile.bad .v{color:var(--bad)}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:8px 10px;border-bottom:1px solid var(--line);
+text-align:left;vertical-align:top}th{color:var(--muted);font-weight:600;font-size:12.5px;text-transform:uppercase;
+letter-spacing:.03em}tbody tr:last-child td{border-bottom:none}td.num,th.num{text-align:right;
+font-variant-numeric:tabular-nums}.scroll{overflow-x:auto}
+.pill{display:inline-block;padding:1px 9px;border-radius:999px;font-size:11.5px;font-weight:700;color:#fff;
+letter-spacing:.02em}.sev-error{background:var(--bad)}.sev-warning{background:var(--warn)}.sev-info{background:var(--unproven)}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-weight:700;
+font-size:13px;color:#fff;letter-spacing:.02em}
 .v-ok{background:var(--ok)}.v-warn{background:var(--warn)}.v-beyond{background:var(--beyond)}
 .v-unproven{background:var(--unproven)}.v-na{background:var(--na)}
-.verdict{border-left:6px solid var(--na);padding:10px 14px;border-radius:8px;background:var(--code);margin:12px 0}
+.verdict{border-left:4px solid var(--na);padding:12px 16px;border-radius:10px;background:var(--code);margin:12px 0}
 .verdict.ok{border-color:var(--ok)}.verdict.warn{border-color:var(--warn)}.verdict.beyond{border-color:var(--beyond)}
-.verdict.unproven{border-color:var(--unproven)}
-pre,code{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px}pre{background:var(--code);
-padding:10px 12px;border-radius:8px;overflow-x:auto}
+.verdict.unproven{border-color:var(--unproven)}.verdict ul{margin:8px 0 0}
+pre,code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px}
+pre{background:var(--code);padding:12px 14px;border-radius:10px;overflow-x:auto;line-height:1.5}
+code{background:var(--code);padding:1px 5px;border-radius:5px}pre code{background:none;padding:0}
 tr.match td{color:var(--ok);font-weight:600}tr.ilp td:first-child{font-weight:700}
-.kmaps{display:flex;flex-wrap:wrap;gap:18px}.kmap{border:1px solid var(--line);border-radius:10px;padding:10px}
-.kmap table{width:auto;font-family:"SF Mono",Menlo,monospace}.kmap td,.kmap th{border:1px solid var(--line);
-text-align:center;min-width:42px;padding:6px 6px}.kmap th{font-weight:500}.kmap .bar{border:none;color:var(--accent);
-font-size:12px;padding:0 4px}.kmap .val{font-weight:700}.kmap .X{color:var(--muted)}
-.kmap sup{font-size:10px;font-weight:700;margin-left:2px}.legend{font-size:12px;margin-top:6px}
-.legend span{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
-ul{margin:6px 0;padding-left:22px}details summary{cursor:pointer;color:var(--muted)}
-img.circuit{max-width:100%;background:#fff;border-radius:8px;border:1px solid var(--line)}
+.kmaps{display:flex;flex-wrap:wrap;gap:16px}
+figure.kmap{margin:0;border:1px solid var(--line);border-radius:12px;padding:12px 14px 10px;background:var(--bg)}
+figure.kmap svg{display:block;max-width:100%;height:auto}
+ul.legend{list-style:none;padding:0;margin:8px 0 0;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+ul.legend span{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+ul{margin:6px 0;padding-left:22px}
+details{margin:10px 0}details>summary{cursor:pointer;color:var(--muted);font-weight:600;list-style:none;
+padding:6px 0}details>summary::-webkit-details-marker{display:none}
+details>summary::before{content:"▸";display:inline-block;width:16px;transition:transform .15s}
+details[open]>summary::before{transform:rotate(90deg)}
+.circuit-box{max-height:560px;overflow:auto;background:#fff;border-radius:10px;border:1px solid var(--line)}
+.circuit-box img{display:block;max-width:100%;height:auto;margin:0 auto}
+svg.timing,.graph svg{display:block;max-width:100%;height:auto}.graph{overflow-x:auto}
+footer{margin-top:48px;font-size:12.5px;color:var(--muted);text-align:center}
+@media print{nav.top{display:none}body{background:#fff}.card{box-shadow:none;break-inside:avoid}
+details{display:block}.circuit-box{max-height:none}}
 """
 
 
@@ -81,15 +102,25 @@ def _e(value: object) -> str:
 
 def render(report: Report, lang: str | None = None) -> str:
     lang = lang or report.lang
-    parts = [_header(report, lang), _image(report, lang), _lint(report, lang), _spec(report, lang),
-             _summary(report, lang)]
-    parts += [_group(g, lang) for g in report.groups]
-    parts += [_truth(report, lang), _seq(report, lang), _closing(report, lang)]
+    sections = [
+        ("circuit", t("ui.circuit_image", lang), _image(report, lang)),
+        ("lint", t("ui.lint", lang), _lint(report, lang)),
+        ("spec", t("ui.spec_check", lang), _spec(report, lang)),
+        ("summary", t("ui.summary", lang), _summary(report, lang)
+         + "".join(_group(g, lang) for g in report.groups)),
+        ("truth", t("ui.truth_table", lang), _truth(report, lang)),
+        ("seq", t("ui.sequential", lang), _seq(report, lang)),
+        ("notes", t("ui.recommendations", lang), _closing(report, lang)),
+    ]
+    present = [(sid, label, body) for sid, label, body in sections if body]
+    nav = "".join(f'<a href="#{sid}">{_e(label)}</a>' for sid, label, _ in present)
+    body = "".join(f'<section id="{sid}">{content}</section>' for sid, _, content in present)
     title = f"logilens · {Path(report.file).name}"
     return (f'<!doctype html><html lang="{_e(lang)}"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1"><title>{_e(title)}</title>'
-            f"<style>{CSS}</style></head><body><main>{''.join(p for p in parts if p)}"
-            f'<p class="muted">logilens {_e(report.tool_version)} · {_e(report.generated_at)}</p>'
+            f'<style>{CSS}</style></head><body><nav class="top"><div><b>logilens</b>{nav}</div></nav>'
+            f"<main>{_header(report, lang)}{body}"
+            f"<footer>logilens {_e(report.tool_version)} · {_e(report.generated_at)}</footer>"
             "</main></body></html>\n")
 
 
@@ -111,27 +142,53 @@ def _table(header: list[str], rows: list[list[str]], classes: list[str] | None =
 def _header(report: Report, lang: str) -> str:
     spec = _e(Path(report.spec.path).name) if report.spec else f'<span class="muted">{_e(t("ui.no_spec", lang))}</span>'
     kv = [
-        (t("ui.file", lang), (f"<code>{_e(Path(report.file).name)}</code> · {_e(t('ui.circuit', lang))} "
-                             f"<code>{_e(report.circuit)}</code>")),
         (t("ui.engine", lang), _e(f"Logisim {report.source_version} · {t('ui.backend', lang)} {report.backend}")),
         (t("ui.io", lang), _e(t("ui.io_value", lang, n_in=len(report.inputs), ins=" ".join(report.inputs),
                                 n_out=len(report.outputs), outs=" ".join(report.outputs)))),
         (t("ui.components", lang), _e(", ".join(f"{k} ×{n}" for k, n in report.stats.items()))),
         (t("ui.type", lang), _e(t("ui.sequential_kind" if report.is_sequential else "ui.combinational_kind", lang))),
         (t("ui.spec", lang), spec),
-        (t("ui.verdict", lang), _badge(report.overall, lang)),
     ]
     rows = "".join(f"<dt>{_e(k)}</dt><dd>{v}</dd>" for k, v in kv)
     notes = "".join(f"<li>{_e(msg(n, lang))}</li>" for n in report.notes)
-    return (f'<div class="card"><h1><span class="brand">logilens</span> · {_e(t("ui.report_title", lang))}'
-            f'</h1><dl class="kv">{rows}</dl>{f"<ul class=muted>{notes}</ul>" if notes else ""}</div>')
+    return (f'<div class="card hero"><div class="title"><h1>{_e(Path(report.file).name)}</h1>'
+            f'{_badge(report.overall, lang)}<span class="file">{_e(t("ui.circuit", lang))} {_e(report.circuit)}'
+            f'</span></div>{_tiles(report, lang)}<dl class="kv">{rows}</dl>'
+            f'{f"<ul class=muted>{notes}</ul>" if notes else ""}</div>')
+
+
+def _tiles(report: Report, lang: str) -> str:
+    tiles = []
+    errors = sum(1 for i in report.lint.issues if i.severity.value == "error")
+    warnings = sum(1 for i in report.lint.issues if i.severity.value == "warning")
+    state = "bad" if errors else "warn" if warnings else "ok"
+    value = "✓ 0" if not report.lint.issues else f"{errors} · {warnings}"
+    sub = f"{t('severity.error', lang)} · {t('severity.warning', lang)}" if report.lint.issues else ""
+    tiles.append((state, t("ui.lint", lang), value, sub))
+    if report.spec is not None:
+        spec = report.spec
+        counts = spec.rows_ok_by_output_group or spec.rows_ok_by_group
+        ok = all(n == spec.rows_checked for n in counts.values())
+        worst = min(counts.values(), default=spec.rows_checked)
+        tiles.append(("ok" if ok else "bad", t("ui.spec_check", lang), f"{worst}/{spec.rows_checked}",
+                      t("ui.rows_correct", lang)))
+    for g in report.groups:
+        fr = g.form_result(g.verdict_form)
+        best = fr.reference.short() if fr and fr.reference else "—"
+        drawn = g.structural.nandnor_short() if g.structural else "—"
+        state = {Verdict.OPTIMAL: "ok", Verdict.IMPROVABLE: "warn"}.get(g.verdict, "")
+        tiles.append((state, g.title, drawn if drawn == best else f"{drawn} → {best}",
+                      f"{t('ui.nandnor_count', lang)} → {t('ui.optimum', lang)}"))
+    return '<div class="tiles">' + "".join(
+        f'<div class="tile {st}"><div class="k">{_e(k)}</div><div class="v">{_e(v)}</div>'
+        f'<div class="s">{_e(sub)}</div></div>' for st, k, v, sub in tiles) + "</div>"
 
 
 def _image(report: Report, lang: str) -> str:
     if not report.image_png:
         return ""
     return (f'<h2>{_e(t("ui.circuit_image", lang))}</h2><div class="card">'
-            f'<img class="circuit" alt="circuit" src="data:image/png;base64,{report.image_png}"></div>')
+            f'<div class="circuit-box"><img alt="circuit" src="data:image/png;base64,{report.image_png}"></div></div>')
 
 
 def _lint(report: Report, lang: str) -> str:
@@ -145,7 +202,10 @@ def _lint(report: Report, lang: str) -> str:
                      f"<code>{_e(i.component or (str(i.loc) if i.loc else i.circuit))}</code>",
                      f"{_e(issue_message(i, lang))}<br><span class='muted'>→ {_e(issue_fix(i, lang))}</span>"])
     header = [_e(t(k, lang)) for k in ("ui.severity", "ui.rule", "ui.where", "ui.problem_fix")]
-    return head + f'<div class="card">{_table(header, rows)}</div>'
+    counts = "".join(f'<span class="pill sev-{sev}">{n} × {_e(t(f"severity.{sev}", lang))}</span>'
+                     for sev in ("error", "warning", "info")
+                     if (n := sum(1 for i in report.lint.issues if i.severity.value == sev)))
+    return head + f'<div class="card"><div class="chips">{counts}</div><div class="scroll">{_table(header, rows)}</div></div>'
 
 
 def _spec(report: Report, lang: str) -> str:
@@ -201,8 +261,8 @@ def _methods(fr: FormResult, lang: str) -> str:
     header = [_e(t(k, lang)) for k in ("ui.method", "ui.cost", "ui.proof", "ui.verified", "ui.time", "ui.note")]
     rob = f"<p class='muted'>{_e(t('ui.robustness', lang))}: {_e(robustness_text(fr, lang))}</p>" if fr.robustness \
         else ""
-    return (f"<h4>{_e(t('ui.methods_title', lang, form=form_label(fr.form, lang)))}</h4>"
-            + _table(header, rows, classes, num={1, 4}) + rob)
+    return (f"<details><summary>{_e(t('ui.methods_title', lang, form=form_label(fr.form, lang)))} · {len(fr.rows)}"
+            f"</summary><div class='scroll'>{_table(header, rows, classes, num={1, 4})}</div>{rob}</details>")
 
 
 def _group(g: GroupReport, lang: str) -> str:
@@ -228,68 +288,12 @@ def _group(g: GroupReport, lang: str) -> str:
         out.append(f"<p class='muted'>{_e(derivation_legend(fr.form, lang))}</p>")
         if fr.kmaps:
             out.append(f"<h4>{_e(t('ui.kmaps', lang, form=form_label(fr.form, lang)))}</h4>")
-            out.append("<div class='kmaps'>" + "".join(kmap_html(v) for v in fr.kmaps) + "</div>")
+            out.append("<div class='kmaps'>" + "".join(kmap_svg(v) for v in fr.kmaps) + "</div>")
     if g.implemented_kmaps and g.verdict is Verdict.IMPROVABLE:
         out.append(f"<details><summary>{_e(t('ui.implemented_kmaps', lang))}</summary><div class='kmaps'>"
-                   + "".join(kmap_html(v) for v in g.implemented_kmaps) + "</div></details>")
+                   + "".join(kmap_svg(v) for v in g.implemented_kmaps) + "</div></details>")
     out.append("</div>")
     return "".join(out)
-
-
-def _cell_style(groups: list[tuple[str, tuple[bool, bool, bool, bool]]]) -> str:
-    """Tint + inset outline per covering group: edges = (top, right, bottom, left)."""
-    if not groups:
-        return ""
-    shadows = []
-    for k, (color, (top, right, bottom, left)) in enumerate(groups):
-        w = 3 * (k + 1)
-        if top:
-            shadows.append(f"inset 0 {w}px 0 0 {color}")
-        if bottom:
-            shadows.append(f"inset 0 -{w}px 0 0 {color}")
-        if left:
-            shadows.append(f"inset {w}px 0 0 0 {color}")
-        if right:
-            shadows.append(f"inset -{w}px 0 0 0 {color}")
-    tint = groups[0][0] + "26"
-    return f' style="background:{tint};box-shadow:{",".join(shadows)}"' if shadows else f' style="background:{tint}"'
-
-
-def kmap_html(view: KMapView) -> str:
-    """K-map as an HTML table: bars + Gray codes on the axes, tinted cells, group outlines, legend."""
-    ncols = len(view.col_codes)
-    cover: dict[tuple[int, int], list[tuple[str, tuple[bool, bool, bool, bool]]]] = {}
-    labels: dict[tuple[int, int], list[tuple[str, str]]] = {}
-    for g in view.groups:
-        color = COLORS.get(g.color, "#7c3aed")
-        for r0, c0, r1, c1 in g.rects:
-            for r in range(r0, r1 + 1):
-                for c in range(c0, c1 + 1):
-                    cover.setdefault((r, c), []).append((color, (r == r0, c == c1, r == r1, c == c0)))
-        for cell in cells_of_group(view, g):
-            labels.setdefault(cell, []).append((g.label, color))
-    nbars = len(view.row_bars)
-    head = []
-    for var, idx in view.col_bars.items():
-        bar_cells = "".join(f"<th class='bar'>{'━━' if c in idx else ''}</th>" for c in range(ncols))
-        head.append(f"<tr><th class='bar' colspan='{nbars}'></th><th class='bar'>{_e(var)}</th>{bar_cells}</tr>")
-    corner = _e("".join(view.row_vars) + "\\" + "".join(view.col_vars))
-    codes = "".join(f"<th>{_e(code)}</th>" for code in view.col_codes)
-    head.append(f"<tr><th class='bar' colspan='{nbars}'></th><th>{corner}</th>{codes}</tr>")
-    body = []
-    for r, code in enumerate(view.row_codes):
-        bars = "".join(f"<th class='bar' title='{_e(v)}'>{'┃' if r in idx else ''}</th>" for v, idx in view.row_bars.items())
-        cells = []
-        for c in range(ncols):
-            value = view.values[r][c]
-            sup = "".join(f"<sup style='color:{col}'>{_e(lab)}</sup>" for lab, col in labels.get((r, c), []))
-            cells.append(f"<td{_cell_style(cover.get((r, c), []))}><span class='val {value}'>{_e(value)}</span>{sup}</td>")
-        body.append(f"<tr>{bars}<th>{_e(code)}</th>{''.join(cells)}</tr>")
-    row_names = " ".join(view.row_bars)
-    legend = "".join(f"<div><span style='background:{COLORS.get(g.color, '#7c3aed')}'></span>{_e(line)}</div>"
-                     for g, line in zip(view.groups, legend_lines(view, "ascii")))
-    return (f"<div class='kmap'><b>{_e(view.output)}</b> <span class='muted'>({_e(view.form.value)}; ┃ = "
-            f"{_e(row_names)})</span><table>{''.join(head)}{''.join(body)}</table><div class='legend'>{legend}</div></div>")
 
 
 def _truth(report: Report, lang: str) -> str:

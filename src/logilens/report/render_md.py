@@ -123,10 +123,11 @@ def _methods(fr: FormResult, lang: str) -> list[str]:
              r.proof or "—", "✓" if r.verified else "✗", f"{r.runtime_s * 1000:.0f} ms", r.note] for r in fr.rows]
     header = [t("ui.method", lang), t("ui.cost", lang), t("ui.proof", lang), t("ui.verified", lang),
               t("ui.time", lang), t("ui.note", lang)]
-    out = [f"#### {t('ui.methods_title', lang, form=form_label(fr.form, lang))}", ""] + _table(header, rows)
+    title = f"{t('ui.methods_title', lang, form=form_label(fr.form, lang))} · {len(fr.rows)}"
+    out = ["<details>", f"<summary>{title}</summary>", ""] + _table(header, rows)
     if fr.robustness:
         out += [f"{t('ui.robustness', lang)}: " + robustness_text(fr, lang), ""]
-    return out
+    return out + ["</details>", ""]
 
 
 def _group(g: GroupReport, lang: str) -> list[str]:
@@ -158,4 +159,6 @@ def _truth(report: Report, lang: str) -> list[str]:
     truth = report.truth
     assert truth is not None
     rows = [[k, " ".join(bits), " ".join(outs)] for k, (bits, outs) in enumerate(truth.rows)]
-    return [f"## {t('ui.truth_table', lang)}", ""] + _table(["#", " ".join(truth.inputs), " ".join(truth.outputs)], rows)
+    table = _table(["#", " ".join(truth.inputs), " ".join(truth.outputs)], rows)
+    return ([f"## {t('ui.truth_table', lang)}", "", "<details>",
+             f"<summary>{t('ui.show_rows', lang, count=len(truth.rows))}</summary>", ""] + table + ["</details>", ""])

@@ -175,7 +175,7 @@ def test_report_formats(cli: Cli, tmp_path: Path, fmt: str) -> None:
     if fmt == "json":
         assert json.loads(text)["schema"] == "logilens/report@1"
     elif fmt == "html":
-        assert text.startswith("<!doctype html>") and "class='kmap'" in text and "prefers-color-scheme" in text
+        assert text.startswith("<!doctype html>") and '<figure class="kmap"><svg' in text and "prefers-color-scheme" in text
     elif fmt == "md":
         assert text.startswith("# logilens") and "22/52" in text
     else:
