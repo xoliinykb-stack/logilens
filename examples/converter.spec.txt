@@ -1,0 +1,15 @@
+# code table: number  input(abcde)  output(ABCD); unlisted inputs = dont care
+# 5-bit line code (12 valid words) to a 4-bit binary digit
+# inputs: a b c d e   outputs: A B C D
+0  00000 0000
+1  00001 0001
+2  00110 0010
+3  01000 0011
+4  01001 0100
+5  01111 0101
+6  10100 0110
+7  11000 0111
+8  11010 1000
+9  11100 1001
+10 11101 1010
+11 11111 1011

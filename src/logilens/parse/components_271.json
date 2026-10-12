@@ -1,0 +1,3417 @@
+{
+ "format": "logilens components spec v1",
+ "logisim_version": "2.7.1",
+ "generated_from": "reference/logisim-src (Logisim 2.7.1 Java sources); see docs/logisim-2.7.1-components.md",
+ "coordinate_system": "x grows east/right, y grows south/down. Port position = comp loc + (dx, dy). No automatic rotation: every algorithm already handles 'facing' itself (Port offsets are taken verbatim, instance/Port.toEnd).",
+ "port_dir_semantics": "dir is from the component's point of view: input = component reads the net, output = drives it, inout = both/none (pure wiring).",
+ "library_descriptors": {
+  "#Base": "Base",
+  "#Gates": "Gates",
+  "#Wiring": "Wiring",
+  "#Plexers": "Plexers",
+  "#Arithmetic": "Arithmetic",
+  "#Memory": "Memory",
+  "#I/O": "I/O"
+ },
+ "attribute_types": {
+  "direction": "one of north/south/east/west",
+  "bitwidth": "decimal int (BitWidth.parse also strips a leading '/')",
+  "int": "Integer.valueOf",
+  "int_range": "decimal int, must be inside 'range' else attribute ignored (error logged)",
+  "hex_int": "0x.. hex (written form); parse also accepts 0b.., leading-0 octal, decimal",
+  "bool": "Boolean.valueOf: 'true' (case-insensitive) -> true, anything else false",
+  "negate": "bool (gate negateN)",
+  "option": "exact string match among 'values' else ignored",
+  "string": "raw",
+  "font": "'Family style size' (Font.decode)",
+  "color": "#rrggbb or #rrggbbaa",
+  "duration": "int within range",
+  "splitter_bit": "'none' -> unrouted, else 0-based end index",
+  "rom_contents": "multi-line text (see ROM)"
+ },
+ "defaults_rule": "XmlReader.initAttributeSet: an attribute absent from <comp> gets the FACTORY default (getDefaultAttributeValue(attr, sourceVersion)), NOT the value customised in <lib><tool> or <toolbar>. XmlWriter omits attributes equal to the factory default.",
+ "python_reference": "# Reference port-placement algorithms for Logisim 2.7.1 std components.\n# Each `ports_*` function receives `a`: dict attr-name -> parsed value\n# (defaults already applied; see components_271.json \"attributes\"), and\n# returns a list of ports: dict(name, dir, width, dx, dy) where (dx, dy)\n# is the offset from the component's `loc`. dir is from the component's\n# point of view: \"input\" (component reads), \"output\" (component drives),\n# \"inout\". width is an int or None (= adapts to whatever is attached).\n# Integer division in Java truncates toward zero -> use jdiv().\n\n# ---------------------------------------------------------------- helpers\nDEG = {\"east\": 0, \"north\": 90, \"west\": 180, \"south\": 270}\n\n\ndef jdiv(a, b):\n    q = abs(a) // abs(b)\n    return q if (a >= 0) == (b >= 0) else -q\n\n\ndef P(name, dir, width, dx, dy):\n    return {\"name\": name, \"dir\": dir, \"width\": width, \"dx\": dx, \"dy\": dy}\n\n\ndef translate(x, y, d, dist, right=0):\n    # data/Location.translate(Direction, int dist, int right)\n    if d == \"east\":\n        return (x + dist, y + right)\n    if d == \"west\":\n        return (x - dist, y - right)\n    if d == \"south\":\n        return (x - right, y + dist)\n    if d == \"north\":\n        return (x + right, y - dist)\n    return (x + dist, y + right)\n\n\ndef rotate_pt(x, y, frm, to):\n    # data/Location.rotate(from, to, 0, 0)\n    deg = (DEG[to] - DEG[frm]) % 360\n    if deg == 90:\n        return (y, -x)\n    if deg == 180:\n        return (-x, -y)\n    if deg == 270:\n        return (-y, x)\n    return (x, y)\n\n\ndef reverse(d):\n    return {\"east\": \"west\", \"west\": \"east\", \"north\": \"south\", \"south\": \"north\"}[d]\n\n\n# ---------------------------------------------------------------- #Gates\ndef ports_abstract_gate(a, bonus_width, negate_output):\n    # std/gates/AbstractGate.computePorts + getInputOffset\n    inputs = a[\"inputs\"]\n    facing = a[\"facing\"]\n    size = int(a[\"size\"])\n    w = a[\"width\"]\n    axis = size + bonus_width + (10 if negate_output else 0)\n    if inputs <= 3:\n        if size < 40:\n            skip_start, skip_dist, skip_lower_even = -5, 10, 10\n        elif size < 60 or inputs <= 2:\n            skip_start, skip_dist, skip_lower_even = -10, 20, 20\n        else:\n            skip_start, skip_dist, skip_lower_even = -15, 30, 30\n    elif inputs == 4 and size >= 60:\n        skip_start, skip_dist, skip_lower_even = -5, 20, 0\n    else:\n        skip_start, skip_dist, skip_lower_even = -5, 10, 10\n    ports = [P(\"out\", \"output\", w, 0, 0)]\n    for i in range(inputs):\n        if inputs % 2 == 1:\n            dy = skip_start * (inputs - 1) + skip_dist * i\n        else:\n            dy = skip_start * inputs + skip_dist * i\n            if i >= jdiv(inputs, 2):\n                dy += skip_lower_even\n        dx = axis + (10 if a.get(\"negate%d\" % i, False) else 0)\n        if facing == \"north\":\n            x, y = dy, dx\n        elif facing == \"south\":\n            x, y = dy, -dx\n        elif facing == \"west\":\n            x, y = dx, dy\n        else:\n            x, y = -dx, dy\n        ports.append(P(\"in%d\" % i, \"input\", w, x, y))\n    return ports\n\n\ndef ports_not_gate(a):\n    # std/gates/NotGate.configurePorts\n    dx = -20 if a[\"size\"] == \"20\" else -30\n    x, y = translate(0, 0, a[\"facing\"], dx)\n    return [P(\"out\", \"output\", a[\"width\"], 0, 0), P(\"in\", \"input\", a[\"width\"], x, y)]\n\n\ndef ports_buffer(a):\n    # std/gates/Buffer.configurePorts\n    x, y = translate(0, 0, a[\"facing\"], -20)\n    return [P(\"out\", \"output\", a[\"width\"], 0, 0), P(\"in\", \"input\", a[\"width\"], x, y)]\n\n\ndef ports_controlled(a, is_inverter):\n    # std/gates/ControlledBuffer.configurePorts (+ getOffsetBounds)\n    w = 20\n    if is_inverter and a.get(\"size\", \"30\") != \"20\":\n        w = 30\n    d = max(w, 20) - 20\n    rev = reverse(a[\"facing\"])\n    x1, y1 = translate(0, 0, rev, 20 + d)\n    if a[\"control\"] == \"left\":\n        x2, y2 = translate(0, 0, rev, 10 + d, 10)\n    else:\n        x2, y2 = translate(0, 0, rev, 10 + d, -10)\n    return [P(\"out\", \"output\", a[\"width\"], 0, 0),\n            P(\"in\", \"input\", a[\"width\"], x1, y1),\n            P(\"control\", \"input\", 1, x2, y2)]\n\n\n# ---------------------------------------------------------------- #Wiring\ndef splitter_distribution(fanout, bits):\n    # circuit/SplitterAttributes.computeDistribution(fanout, bits, 1)\n    ret = [0] * bits\n    if fanout >= bits:\n        for i in range(bits):\n            ret[i] = i + 1\n    else:\n        threads_per_end = jdiv(bits, fanout)\n        ends_with_extra = bits % fanout\n        cur_end = -1\n        left_in_end = 0\n        for i in range(bits):\n            if left_in_end == 0:\n                cur_end += 1\n                left_in_end = threads_per_end\n                if ends_with_extra > 0:\n                    left_in_end += 1\n                    ends_with_extra -= 1\n            ret[i] = 1 + cur_end\n            left_in_end -= 1\n    return ret\n\n\ndef splitter_bit_end(a):\n    # bit_end[i]: 0 = bit not connected to any split end, k = split end k (1-based).\n    # XML \"bitN\": \"none\" -> 0, \"k\" -> k+1. Missing bitN -> XmlReader applies the\n    # factory default N+1, which SplitterAttributes.setValue accepts only if N+1 <= fanout;\n    # otherwise the computeDistribution() value stays.\n    fanout = a[\"fanout\"]\n    bits = a[\"incoming\"]\n    dist = splitter_distribution(fanout, bits)\n    out = []\n    for i in range(bits):\n        raw = a.get(\"bit%d\" % i)\n        if raw is None:\n            v = i + 1 if i + 1 <= fanout else dist[i]\n        else:\n            v = raw if 0 <= raw <= fanout else dist[i]\n        out.append(v)\n    return out\n\n\ndef ports_splitter(a):\n    # circuit/SplitterParameters + Splitter.configureComponent\n    fanout = a[\"fanout\"]\n    facing = a[\"facing\"]\n    appear = a[\"appear\"]\n    if appear in (\"center\", \"legacy\"):\n        justify = 0\n    elif appear == \"right\":\n        justify = 1\n    else:\n        justify = -1\n    width = 20\n    if facing in (\"north\", \"south\"):\n        m = 1 if facing == \"north\" else -1\n        if justify == 0:\n            dx0 = 10 * (jdiv(fanout + 1, 2) - 1)\n        elif m * justify < 0:\n            dx0 = -10\n        else:\n            dx0 = 10 * fanout\n        dy0 = -m * width\n        ddx, ddy = -10, 0\n    else:\n        m = -1 if facing == \"west\" else 1\n        dx0 = m * width\n        if justify == 0:\n            dy0 = -10 * jdiv(fanout, 2)\n        elif m * justify > 0:\n            dy0 = 10\n        else:\n            dy0 = -10 * fanout\n        ddx, ddy = 0, 10\n    bit_end = splitter_bit_end(a)\n    widths = [0] * (fanout + 1)\n    for e in bit_end:\n        if e > 0:\n            widths[e] += 1\n    ports = [P(\"combined\", \"inout\", a[\"incoming\"], 0, 0)]\n    x, y = dx0, dy0\n    for i in range(fanout):\n        ports.append(P(\"end%d\" % i, \"inout\", widths[i + 1] if widths[i + 1] > 0 else None, x, y))\n        x += ddx\n        y += ddy\n    return ports\n\n\ndef ports_pin(a):\n    # std/wiring/Pin.configurePorts: output pin -> port is INPUT, input pin -> OUTPUT\n    if a[\"output\"]:\n        return [P(\"pin\", \"input\", a[\"width\"], 0, 0)]\n    return [P(\"pin\", \"output\", a[\"width\"], 0, 0)]\n\n\ndef ports_probe(a):\n    return [P(\"in\", \"input\", None, 0, 0)]\n\n\ndef ports_tunnel(a):\n    return [P(\"io\", \"inout\", a[\"width\"], 0, 0)]\n\n\ndef ports_pull_resistor(a):\n    return [P(\"io\", \"inout\", None, 0, 0)]\n\n\ndef ports_clock(a):\n    return [P(\"out\", \"output\", 1, 0, 0)]\n\n\ndef ports_constant(a):\n    return [P(\"out\", \"output\", a[\"width\"], 0, 0)]\n\n\ndef ports_power_ground(a):\n    return [P(\"out\", \"output\", a[\"width\"], 0, 0)]\n\n\ndef _trans_d(facing):\n    dx = dy = 0\n    if facing == \"north\":\n        dy = 1\n    elif facing == \"east\":\n        dx = -1\n    elif facing == \"south\":\n        dy = -1\n    elif facing == \"west\":\n        dx = 1\n    return dx, dy\n\n\ndef ports_transistor(a):\n    # std/wiring/Transistor.updatePorts\n    facing = a[\"facing\"]\n    dx, dy = _trans_d(facing)\n    flip = (facing in (\"south\", \"west\")) == (a[\"gate\"] == \"tl\")\n    if flip:\n        g = (20 * (dx + dy), 20 * (-dx + dy))\n    else:\n        g = (20 * (dx - dy), 20 * (dx + dy))\n    return [P(\"out\", \"output\", a[\"width\"], 0, 0),\n            P(\"in\", \"input\", a[\"width\"], 40 * dx, 40 * dy),\n            P(\"gate\", \"input\", 1, g[0], g[1])]\n\n\ndef ports_transmission_gate(a):\n    # std/wiring/TransmissionGate.updatePorts\n    facing = a[\"facing\"]\n    dx, dy = _trans_d(facing)\n    flip = (facing in (\"south\", \"west\")) == (a[\"gate\"] == \"tl\")\n    pa = (20 * (dx - dy), 20 * (dx + dy))\n    pb = (20 * (dx + dy), 20 * (-dx + dy))\n    if flip:\n        g1, g0 = pa, pb\n    else:\n        g0, g1 = pa, pb\n    return [P(\"out\", \"output\", a[\"width\"], 0, 0),\n            P(\"in\", \"input\", a[\"width\"], 40 * dx, 40 * dy),\n            P(\"gate0\", \"input\", 1, g0[0], g0[1]),\n            P(\"gate1\", \"input\", 1, g1[0], g1[1])]\n\n\ndef ports_bit_extender(a):\n    # std/wiring/BitExtender.configurePorts (no facing; fixed geometry)\n    ps = [P(\"out\", \"output\", a[\"out_width\"], 0, 0),\n          P(\"in\", \"input\", a[\"in_width\"], -40, 0)]\n    if a[\"type\"] == \"input\":\n        ps.append(P(\"extend\", \"input\", 1, -20, -20))\n    return ps\n\n\n# ---------------------------------------------------------------- #Plexers\ndef ports_multiplexer(a):\n    # std/plexers/Multiplexer.updatePorts\n    d = a[\"facing\"]\n    sel_mult = 1 if a[\"selloc\"] == \"bl\" else -1\n    data = a[\"width\"]\n    sbits = a[\"select\"]\n    enable = a[\"enable\"]\n    inputs = 1 << sbits\n    ps = []\n    if inputs == 2:\n        if d == \"west\":\n            e0, e1, sel = (30, -10), (30, 10), (20, sel_mult * 20)\n        elif d == \"north\":\n            e0, e1, sel = (-10, 30), (10, 30), (sel_mult * -20, 20)\n        elif d == \"south\":\n            e0, e1, sel = (-10, -30), (10, -30), (sel_mult * -20, -20)\n        else:\n            e0, e1, sel = (-30, -10), (-30, 10), (-20, sel_mult * 20)\n        ps.append(P(\"in0\", \"input\", data, e0[0], e0[1]))\n        ps.append(P(\"in1\", \"input\", data, e1[0], e1[1]))\n    else:\n        dx = -jdiv(inputs, 2) * 10\n        ddx = 10\n        dy = -jdiv(inputs, 2) * 10\n        ddy = 10\n        if d == \"west\":\n            dx, ddx = 40, 0\n            sel = (20, sel_mult * (dy + 10 * inputs))\n        elif d == \"north\":\n            dy, ddy = 40, 0\n            sel = (sel_mult * dx, 20)\n        elif d == \"south\":\n            dy, ddy = -40, 0\n            sel = (sel_mult * dx, -20)\n        else:\n            dx, ddx = -40, 0\n            sel = (-20, sel_mult * (dy + 10 * inputs))\n        for i in range(inputs):\n            ps.append(P(\"in%d\" % i, \"input\", data, dx, dy))\n            dx += ddx\n            dy += ddy\n    ps.append(P(\"select\", \"input\", sbits, sel[0], sel[1]))\n    if enable:\n        en = translate(sel[0], sel[1], d, 10)\n        ps.append(P(\"enable\", \"input\", 1, en[0], en[1]))\n    ps.append(P(\"out\", \"output\", data, 0, 0))\n    return ps\n\n\ndef ports_demultiplexer(a):\n    # std/plexers/Demultiplexer.updatePorts\n    d = a[\"facing\"]\n    sel_mult = 1 if a[\"selloc\"] == \"bl\" else -1\n    data = a[\"width\"]\n    sbits = a[\"select\"]\n    enable = a[\"enable\"]\n    outputs = 1 << sbits\n    ps = []\n    if outputs == 2:\n        if d == \"west\":\n            e0, e1, sel = (-30, -10), (-30, 10), (-20, sel_mult * 20)\n        elif d == \"north\":\n            e0, e1, sel = (-10, -30), (10, -30), (sel_mult * -20, -20)\n        elif d == \"south\":\n            e0, e1, sel = (-10, 30), (10, 30), (sel_mult * -20, 20)\n        else:\n            e0, e1, sel = (30, -10), (30, 10), (20, sel_mult * 20)\n        ps.append(P(\"out0\", \"output\", data, e0[0], e0[1]))\n        ps.append(P(\"out1\", \"output\", data, e1[0], e1[1]))\n    else:\n        dx = -jdiv(outputs, 2) * 10\n        ddx = 10\n        dy = dx\n        ddy = 10\n        if d == \"west\":\n            dx, ddx = -40, 0\n            sel = (-20, sel_mult * (dy + 10 * outputs))\n        elif d == \"north\":\n            dy, ddy = -40, 0\n            sel = (sel_mult * dx, -20)\n        elif d == \"south\":\n            dy, ddy = 40, 0\n            sel = (sel_mult * dx, 20)\n        else:\n            dx, ddx = 40, 0\n            sel = (20, sel_mult * (dy + 10 * outputs))\n        for i in range(outputs):\n            ps.append(P(\"out%d\" % i, \"output\", data, dx, dy))\n            dx += ddx\n            dy += ddy\n    ps.append(P(\"select\", \"input\", sbits, sel[0], sel[1]))\n    if enable:\n        en = translate(sel[0], sel[1], d, -10)\n        ps.append(P(\"enable\", \"input\", 1, en[0], en[1]))\n    ps.append(P(\"in\", \"input\", data, 0, 0))\n    return ps\n\n\ndef ports_decoder(a):\n    # std/plexers/Decoder.updatePorts\n    d = a[\"facing\"]\n    tr = a[\"selloc\"] == \"tr\"\n    sbits = a[\"select\"]\n    enable = a[\"enable\"]\n    outputs = 1 << sbits\n    ps = []\n    if outputs == 2:\n        if d in (\"north\", \"south\"):\n            y = -10 if d == \"north\" else 10\n            e0, e1 = ((-30, y), (-10, y)) if tr else ((10, y), (30, y))\n        else:\n            x = -10 if d == \"west\" else 10\n            e0, e1 = ((x, 10), (x, 30)) if tr else ((x, -30), (x, -10))\n        ps.append(P(\"out0\", \"output\", 1, e0[0], e0[1]))\n        ps.append(P(\"out1\", \"output\", 1, e1[0], e1[1]))\n    else:\n        if d in (\"north\", \"south\"):\n            dy = -20 if d == \"north\" else 20\n            ddy = 0\n            dx = -10 * outputs if tr else 0\n            ddx = 10\n        else:\n            dx = -20 if d == \"west\" else 20\n            ddx = 0\n            dy = 0 if tr else -10 * outputs\n            ddy = 10\n        for i in range(outputs):\n            ps.append(P(\"out%d\" % i, \"output\", 1, dx, dy))\n            dx += ddx\n            dy += ddy\n    ps.append(P(\"select\", \"input\", sbits, 0, 0))\n    if enable:\n        en = translate(0, 0, d, -10)\n        ps.append(P(\"enable\", \"input\", 1, en[0], en[1]))\n    return ps\n\n\ndef ports_priority_encoder(a):\n    # std/plexers/PriorityEncoder.updatePorts ; port order: in0..in(n-1), out, enable_in, enable_out, group_signal\n    d = a[\"facing\"]\n    sbits = a[\"select\"]\n    n = 1 << sbits\n    ps = []\n    if d in (\"north\", \"south\"):\n        x = -5 * n + 10\n        y = 40 if d == \"north\" else -40\n        for i in range(n):\n            ps.append(P(\"in%d\" % i, \"input\", 1, x + 10 * i, y))\n        ps.append(P(\"out\", \"output\", sbits, 0, 0))\n        ps.append(P(\"enable_in\", \"input\", 1, x + 10 * n, jdiv(y, 2)))\n        ps.append(P(\"enable_out\", \"output\", 1, x - 10, jdiv(y, 2)))\n        ps.append(P(\"group_signal\", \"output\", 1, 10, 0))\n    else:\n        x = -40 if d == \"east\" else 40\n        y = -5 * n + 10\n        for i in range(n):\n            ps.append(P(\"in%d\" % i, \"input\", 1, x, y + 10 * i))\n        ps.append(P(\"out\", \"output\", sbits, 0, 0))\n        ps.append(P(\"enable_in\", \"input\", 1, jdiv(x, 2), y + 10 * n))\n        ps.append(P(\"enable_out\", \"output\", 1, jdiv(x, 2), y - 10))\n        ps.append(P(\"group_signal\", \"output\", 1, 0, 10))\n    return ps\n\n\ndef ports_bit_selector(a):\n    # std/plexers/BitSelector.updatePorts\n    d = a[\"facing\"]\n    data = a[\"width\"]\n    group = a[\"group\"]\n    groups = jdiv(data + group - 1, group) - 1\n    select_bits = 1\n    if groups > 0:\n        while groups != 1:\n            groups >>= 1\n            select_bits += 1\n    if d == \"west\":\n        inp, sel = (30, 0), (10, 10)\n    elif d == \"north\":\n        inp, sel = (0, 30), (-10, 10)\n    elif d == \"south\":\n        inp, sel = (0, -30), (-10, -10)\n    else:\n        inp, sel = (-30, 0), (-10, 10)\n    return [P(\"out\", \"output\", group, 0, 0),\n            P(\"in\", \"input\", data, inp[0], inp[1]),\n            P(\"select\", \"input\", select_bits, sel[0], sel[1])]\n\n\n# ---------------------------------------------------------------- #Arithmetic\ndef ports_adder(a):\n    w = a[\"width\"]\n    # NB: carry-out is declared Port.INPUT in Adder.java (source quirk) but is driven by propagate()\n    return [P(\"a\", \"input\", w, -40, -10), P(\"b\", \"input\", w, -40, 10), P(\"out\", \"output\", w, 0, 0),\n            P(\"carry_in\", \"input\", 1, -20, -20), P(\"carry_out\", \"output\", 1, -20, 20)]\n\n\ndef ports_subtractor(a):\n    w = a[\"width\"]\n    return [P(\"a\", \"input\", w, -40, -10), P(\"b\", \"input\", w, -40, 10), P(\"out\", \"output\", w, 0, 0),\n            P(\"borrow_in\", \"input\", 1, -20, -20), P(\"borrow_out\", \"output\", 1, -20, 20)]\n\n\ndef ports_multiplier(a):\n    w = a[\"width\"]\n    return [P(\"a\", \"input\", w, -40, -10), P(\"b\", \"input\", w, -40, 10), P(\"out\", \"output\", w, 0, 0),\n            P(\"carry_in\", \"input\", w, -20, -20), P(\"carry_out\", \"output\", w, -20, 20)]\n\n\ndef ports_divider(a):\n    w = a[\"width\"]\n    return [P(\"dividend_lower\", \"input\", w, -40, -10), P(\"divisor\", \"input\", w, -40, 10),\n            P(\"quotient\", \"output\", w, 0, 0), P(\"dividend_upper\", \"input\", w, -20, -20),\n            P(\"remainder\", \"output\", w, -20, 20)]\n\n\ndef ports_negator(a):\n    w = a[\"width\"]\n    return [P(\"in\", \"input\", w, -40, 0), P(\"out\", \"output\", w, 0, 0)]\n\n\ndef ports_comparator(a):\n    w = a[\"width\"]\n    return [P(\"a\", \"input\", w, -40, -10), P(\"b\", \"input\", w, -40, 10),\n            P(\"gt\", \"output\", 1, 0, -10), P(\"eq\", \"output\", 1, 0, 0), P(\"lt\", \"output\", 1, 0, 10)]\n\n\ndef ports_shifter(a):\n    data = a[\"width\"]\n    shift = 1\n    while (1 << shift) < data:\n        shift += 1\n    return [P(\"data\", \"input\", data, -40, -10), P(\"dist\", \"input\", shift, -40, 10),\n            P(\"out\", \"output\", data, 0, 0)]\n\n\ndef ports_bit_adder(a):\n    w = a[\"width\"]\n    inputs = a[\"inputs\"]\n    max_bits = w * inputs\n    out_w = 1\n    while (1 << out_w) <= max_bits:\n        out_w += 1\n    dy = 10\n    if inputs == 1:\n        y = 0\n    elif inputs == 2:\n        y, dy = -10, 20\n    elif inputs == 3:\n        y = -10\n    else:\n        y = jdiv(inputs - 1, 2) * -10\n    ps = [P(\"out\", \"output\", out_w, 0, 0)]\n    for i in range(inputs):\n        ps.append(P(\"in%d\" % i, \"input\", w, -40, y + i * dy))\n    return ps\n\n\ndef ports_bit_finder(a):\n    w = a[\"width\"]\n    max_bits = w - 1\n    out_w = 1\n    while (1 << out_w) <= max_bits:\n        out_w += 1\n    return [P(\"present\", \"output\", 1, -20, 20), P(\"index\", \"output\", out_w, 0, 0),\n            P(\"in\", \"input\", w, -40, 0)]\n\n\n# ---------------------------------------------------------------- #Memory\ndef ports_flip_flop(a, input_names):\n    # std/memory/AbstractFlipFlop constructor. Order: data inputs, clock, Q, notQ, reset, preset, enable\n    if len(input_names) == 1:\n        ps = [P(input_names[0], \"input\", 1, -40, 20), P(\"clock\", \"input\", 1, -40, 0)]\n    else:\n        ps = [P(input_names[0], \"input\", 1, -40, 0), P(input_names[1], \"input\", 1, -40, 20),\n              P(\"clock\", \"input\", 1, -40, 10)]\n    ps += [P(\"q\", \"output\", 1, 0, 0), P(\"nq\", \"output\", 1, 0, 20),\n           P(\"reset\", \"input\", 1, -10, 30), P(\"preset\", \"input\", 1, -30, 30),\n           P(\"enable\", \"input\", 1, -20, 30)]\n    return ps\n\n\ndef ports_register(a):\n    w = a[\"width\"]\n    return [P(\"q\", \"output\", w, 0, 0), P(\"d\", \"input\", w, -30, 0), P(\"clock\", \"input\", 1, -20, 20),\n            P(\"clear\", \"input\", 1, -10, 20), P(\"enable\", \"input\", 1, -30, 10)]\n\n\ndef ports_counter(a):\n    w = a[\"width\"]\n    return [P(\"q\", \"output\", w, 0, 0), P(\"d\", \"input\", w, -30, 0), P(\"clock\", \"input\", 1, -20, 20),\n            P(\"clear\", \"input\", 1, -10, 20), P(\"load\", \"input\", 1, -30, -10),\n            P(\"count\", \"input\", 1, -30, 10), P(\"carry\", \"output\", 1, 0, 10)]\n\n\ndef ports_shift_register(a):\n    # std/memory/ShiftRegister.configurePorts (location = left edge; no facing)\n    w = a[\"width\"]\n    parallel = a[\"parallel\"]\n    length = a[\"length\"]\n    bw = 20 + 10 * length if parallel else 30\n    ps = [P(\"in\", \"input\", w, 0, 0), P(\"shift\", \"input\", 1, 0, -10), P(\"clock\", \"input\", 1, 0, 10),\n          P(\"clear\", \"input\", 1, 10, 20), P(\"out\", \"output\", w, bw, 0)]\n    if parallel:\n        ps.append(P(\"load\", \"input\", 1, 10, -20))\n        for i in range(length):\n            ps.append(P(\"d%d\" % i, \"input\", w, 20 + 10 * i, -20))\n            ps.append(P(\"q%d\" % i, \"output\", w, 20 + 10 * i, 20))\n    return ps\n\n\ndef ports_random(a):\n    w = a[\"width\"]\n    return [P(\"q\", \"output\", w, 0, 0), P(\"clock\", \"input\", 1, -30, -10),\n            P(\"next\", \"input\", 1, -30, 10), P(\"reset\", \"input\", 1, -20, 20)]\n\n\ndef ports_ram(a):\n    # std/memory/Mem.configureStandardPorts + Ram.configurePorts\n    bus = a[\"bus\"]\n    ps = [P(\"data\", \"inout\", a[\"dataWidth\"], 0, 0), P(\"addr\", \"input\", a[\"addrWidth\"], -140, 0),\n          P(\"cs\", \"input\", 1, -90, 40), P(\"oe\", \"input\", 1, -50, 40), P(\"clear\", \"input\", 1, -30, 40)]\n    if bus != \"asynch\":\n        ps.append(P(\"clock\", \"input\", 1, -70, 40))\n    if bus == \"separate\":\n        ps.append(P(\"we\", \"input\", 1, -110, 40))\n        ps.append(P(\"din\", \"input\", a[\"dataWidth\"], -140, 20))\n    return ps\n\n\ndef ports_rom(a):\n    # DATA declared INOUT in Mem.configureStandardPorts; ROM only drives it.\n    return [P(\"data\", \"inout\", a[\"dataWidth\"], 0, 0), P(\"addr\", \"input\", a[\"addrWidth\"], -140, 0),\n            P(\"cs\", \"input\", 1, -90, 40)]\n\n\n# ---------------------------------------------------------------- #I/O\ndef ports_button(a):\n    return [P(\"out\", \"output\", 1, 0, 0)]\n\n\ndef ports_led(a):\n    return [P(\"in\", \"input\", 1, 0, 0)]\n\n\ndef ports_joystick(a):\n    return [P(\"x\", \"output\", a[\"bits\"], 0, 0), P(\"y\", \"output\", a[\"bits\"], 0, 10)]\n\n\ndef ports_keyboard(a):\n    return [P(\"clear\", \"input\", 1, 20, 10), P(\"clock\", \"input\", 1, 0, 0), P(\"read_enable\", \"input\", 1, 10, 10),\n            P(\"available\", \"output\", 1, 130, 10), P(\"data\", \"output\", 7, 140, 10)]\n\n\ndef ports_seven_segment(a):\n    # order: a b c d e f g dp\n    return [P(\"a\", \"input\", 1, 20, 0), P(\"b\", \"input\", 1, 30, 0), P(\"c\", \"input\", 1, 20, 60),\n            P(\"d\", \"input\", 1, 10, 60), P(\"e\", \"input\", 1, 0, 60), P(\"f\", \"input\", 1, 10, 0),\n            P(\"g\", \"input\", 1, 0, 0), P(\"dp\", \"input\", 1, 30, 60)]\n\n\ndef ports_hex_digit(a):\n    return [P(\"digit\", \"input\", 4, 0, 0), P(\"dp\", \"input\", 1, 10, 0)]\n\n\ndef ports_dot_matrix(a):\n    inp = a[\"inputtype\"]\n    rows = a[\"matrixrows\"]\n    cols = a[\"matrixcols\"]\n    if inp == \"column\":\n        return [P(\"col%d\" % i, \"input\", rows, 10 * i, 0) for i in range(cols)]\n    if inp == \"row\":\n        return [P(\"row%d\" % i, \"input\", cols, 0, 10 * i) for i in range(rows)]\n    if rows <= 1:\n        return [P(\"select_col\", \"input\", cols, 0, 0)]\n    if cols <= 1:\n        return [P(\"select_row\", \"input\", rows, 0, 0)]\n    return [P(\"select_col\", \"input\", cols, 0, 0), P(\"select_row\", \"input\", rows, 0, 10)]\n\n\ndef ports_tty(a):\n    return [P(\"clear\", \"input\", 1, 20, 10), P(\"clock\", \"input\", 1, 0, 0),\n            P(\"write_enable\", \"input\", 1, 10, 10), P(\"data\", \"input\", 7, 0, -10)]\n\n\n# ---------------------------------------------------------------- #Base\ndef ports_none(a):\n    return []\n\n\n# ---------------------------------------------------------------- subcircuits\ndef _compute_dimension(max_this, max_others):\n    if max_this < 3:\n        return 30\n    if max_others == 0:\n        return 10 * max_this\n    return 10 * max_this + 10\n\n\ndef _compute_offset(num_facing, num_opposite, max_others):\n    max_this = max(num_facing, num_opposite)\n    if max_this in (0, 1):\n        max_offs = 15 if max_others == 0 else 10\n    elif max_this == 2:\n        max_offs = 10\n    else:\n        max_offs = 5 if max_others == 0 else 10\n    return max_offs + 10 * jdiv(max_this - num_facing, 2)\n\n\ndef default_appearance(pins):\n    \"\"\"circuit/appear/DefaultAppearance.build.\n    pins: list of dict(x, y, facing, output(bool), width, label) for every Pin in the subcircuit.\n    Returns (anchor_facing, [(pin, ox, oy)]) with (ox, oy) relative to the anchor\n    (= the instance loc), for an instance whose facing equals anchor_facing (east).\"\"\"\n    edge = {\"north\": [], \"south\": [], \"east\": [], \"west\": []}\n    for p in pins:\n        edge[reverse(p[\"facing\"])].append(p)\n    for k, lst in edge.items():\n        if k in (\"north\", \"south\"):\n            lst.sort(key=lambda p: (p[\"x\"], p[\"x\"], p[\"y\"]))\n        else:\n            lst.sort(key=lambda p: (p[\"y\"], p[\"x\"], p[\"y\"]))\n    n_n, n_s, n_e, n_w = (len(edge[k]) for k in (\"north\", \"south\", \"east\", \"west\"))\n    max_vert = max(n_n, n_s)\n    max_horz = max(n_e, n_w)\n    offs_n = _compute_offset(n_n, n_s, max_horz)\n    offs_s = _compute_offset(n_s, n_n, max_horz)\n    offs_e = _compute_offset(n_e, n_w, max_vert)\n    offs_w = _compute_offset(n_w, n_e, max_vert)\n    width = _compute_dimension(max_vert, max_horz)\n    height = _compute_dimension(max_horz, max_vert)\n    if n_e > 0:\n        ax, ay = width, offs_e\n    elif n_n > 0:\n        ax, ay = offs_n, 0\n    elif n_w > 0:\n        ax, ay = 0, offs_w\n    elif n_s > 0:\n        ax, ay = offs_s, height\n    else:\n        ax, ay = 0, 0\n    out = []\n    for i, p in enumerate(edge[\"west\"]):\n        out.append((p, 0 - ax, offs_w + 10 * i - ay))\n    for i, p in enumerate(edge[\"east\"]):\n        out.append((p, width - ax, offs_e + 10 * i - ay))\n    for i, p in enumerate(edge[\"north\"]):\n        out.append((p, offs_n + 10 * i - ax, 0 - ay))\n    for i, p in enumerate(edge[\"south\"]):\n        out.append((p, offs_s + 10 * i - ax, height - ay))\n    return \"east\", out\n\n\ndef ports_subcircuit(a, pins, custom_appearance=None):\n    \"\"\"SubcircuitFactory.computePorts + CircuitAppearance.getPortOffsets.\n    custom_appearance: None for default appearance, else dict(anchor=(x,y) or None,\n    anchor_facing=str, ports=[(pin_x, pin_y, px, py)]) where (px,py) = round(x+w/2), round(y+h/2)\n    of each <circ-port> and (pin_x,pin_y) its \"pin\" attribute (location of the Pin in the subcircuit).\"\"\"\n    if custom_appearance is None:\n        anchor_facing, offs = default_appearance(pins)\n    else:\n        by_loc = {(p[\"x\"], p[\"y\"]): p for p in pins}\n        anchor = custom_appearance.get(\"anchor\")\n        anchor_facing = custom_appearance.get(\"anchor_facing\", \"east\")\n        offs = []\n        for (pinx, piny, px, py) in custom_appearance[\"ports\"]:\n            p = by_loc.get((pinx, piny))\n            if p is None:\n                continue  # AppearanceSvgReader drops ports whose pin is not found\n            if anchor is not None:\n                px, py = px - anchor[0], py - anchor[1]\n            offs.append((p, px, py))\n    facing = a.get(\"facing\") or anchor_facing\n    ports = []\n    for p, ox, oy in offs:\n        if facing != anchor_facing:\n            ox, oy = rotate_pt(ox, oy, anchor_facing, facing)\n        ports.append(P(p.get(\"label\") or \"pin@(%d,%d)\" % (p[\"x\"], p[\"y\"]),\n                       \"output\" if p[\"output\"] else \"input\", p[\"width\"], ox, oy))\n    # SubcircuitFactory iterates a TreeMap keyed by Location -> sort by (x, y)\n    ports.sort(key=lambda q: (q[\"dx\"], q[\"dy\"]))\n    return ports\n\n\n# ---------------------------------------------------------------- attribute parsing / defaults\ndef parse_attr_value(atype, raw):\n    \"\"\"Parse the XML string of <a name=.. val=..> (or its text content) like Logisim does.\"\"\"\n    if atype in (\"bitwidth\",):\n        s = raw[1:] if raw.startswith(\"/\") else raw\n        return int(s)\n    if atype in (\"int\", \"int_range\", \"duration\"):\n        return int(raw)\n    if atype == \"hex_int\":\n        v = raw.lower()\n        if v.startswith(\"0x\"):\n            n = int(v[2:], 16)\n        elif v.startswith(\"0b\"):\n            n = int(v[2:], 2)\n        elif v.startswith(\"0\") and len(v) > 1:\n            n = int(v[1:], 8)\n        else:\n            n = int(v, 10)\n        n &= 0xFFFFFFFF  # (int) Long.parseLong(...)\n        return n - (1 << 32) if n >= (1 << 31) else n\n    if atype in (\"bool\", \"negate\"):\n        return raw.strip().lower() == \"true\"  # Boolean.valueOf\n    if atype == \"splitter_bit\":\n        return 0 if raw == \"none\" else 1 + int(raw)\n    return raw  # direction, option, string, font, color, rom_contents\n\n\ndef version_tuple(source):\n    # \"2.7.1\" -> (2,7,1,0); missing source attribute -> Logisim treats it as 2.7.1\n    if not source:\n        return (2, 7, 1, 0)\n    parts = [int(p) for p in source.split(\".\")[:4] if p.isdigit()]\n    while len(parts) < 4:\n        parts.append(0)\n    return tuple(parts)\n\n\ndef resolve_attrs(spec, xml_attrs, source_version=\"2.7.1\"):\n    \"\"\"Apply XmlReader.initAttributeSet semantics: every attribute missing from the\n    <comp> gets the *factory* default (never the <lib><tool> customisation).\"\"\"\n    ver = version_tuple(source_version)\n    out = {}\n    for ad in spec[\"attributes\"]:\n        name = ad[\"name\"]\n        if ad.get(\"dynamic\") == \"negate\":\n            continue\n        if ad.get(\"dynamic\") == \"splitter_bits\":\n            continue\n        if name in xml_attrs:\n            out[name] = parse_attr_value(ad[\"type\"], xml_attrs[name])\n        else:\n            dflt = ad[\"default\"]\n            vd = ad.get(\"version_default\")\n            if vd is not None:\n                dflt = vd[\"new\"] if ver >= tuple(vd[\"since\"]) else vd[\"old\"]\n            out[name] = None if dflt is None else parse_attr_value(ad[\"type\"], dflt)\n    # dynamic attributes\n    for ad in spec[\"attributes\"]:\n        if ad.get(\"dynamic\") == \"negate\":\n            for i in range(out.get(\"inputs\", 0)):\n                k = \"negate%d\" % i\n                out[k] = parse_attr_value(\"bool\", xml_attrs[k]) if k in xml_attrs else False\n        elif ad.get(\"dynamic\") == \"splitter_bits\":\n            for i in range(out[\"incoming\"]):\n                k = \"bit%d\" % i\n                if k in xml_attrs:\n                    out[k] = parse_attr_value(\"splitter_bit\", xml_attrs[k])\n    return out\n",
+ "python_reference_functions": [
+  "P",
+  "_compute_dimension",
+  "_compute_offset",
+  "_trans_d",
+  "default_appearance",
+  "jdiv",
+  "parse_attr_value",
+  "ports_abstract_gate",
+  "ports_adder",
+  "ports_bit_adder",
+  "ports_bit_extender",
+  "ports_bit_finder",
+  "ports_bit_selector",
+  "ports_buffer",
+  "ports_button",
+  "ports_clock",
+  "ports_comparator",
+  "ports_constant",
+  "ports_controlled",
+  "ports_counter",
+  "ports_decoder",
+  "ports_demultiplexer",
+  "ports_divider",
+  "ports_dot_matrix",
+  "ports_flip_flop",
+  "ports_hex_digit",
+  "ports_joystick",
+  "ports_keyboard",
+  "ports_led",
+  "ports_multiplexer",
+  "ports_multiplier",
+  "ports_negator",
+  "ports_none",
+  "ports_not_gate",
+  "ports_pin",
+  "ports_power_ground",
+  "ports_priority_encoder",
+  "ports_probe",
+  "ports_pull_resistor",
+  "ports_ram",
+  "ports_random",
+  "ports_register",
+  "ports_rom",
+  "ports_seven_segment",
+  "ports_shift_register",
+  "ports_shifter",
+  "ports_splitter",
+  "ports_subcircuit",
+  "ports_subtractor",
+  "ports_transistor",
+  "ports_transmission_gate",
+  "ports_tty",
+  "ports_tunnel",
+  "resolve_attrs",
+  "reverse",
+  "rotate_pt",
+  "splitter_bit_end",
+  "splitter_distribution",
+  "translate",
+  "version_tuple"
+ ],
+ "components": [
+  {
+   "library": "#Gates",
+   "name": "AND Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/AndGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 0,
+     "negate_output": false
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "AND of connected inputs (Value.and: 0 dominates, else any X/E -> E). Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "OR Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/OrGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 0,
+     "negate_output": false
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "OR of connected inputs (1 dominates, else any X/E -> E). Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "NAND Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/NandGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 0,
+     "negate_output": true
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "NOT(AND). Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "NOR Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/NorGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 0,
+     "negate_output": true
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "NOT(OR). Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "XOR Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/XorGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "xor",
+     "type": "option",
+     "default": "1",
+     "values": [
+      "1",
+      "odd"
+     ],
+     "note": "1 = exactly one input high; odd = odd parity"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 10,
+     "negate_output": false
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "xor=1 (default): 1 iff exactly one input is 1; xor=odd: odd parity. Any X/E input -> E. Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "XNOR Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/XnorGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "xor",
+     "type": "option",
+     "default": "1",
+     "values": [
+      "1",
+      "odd"
+     ],
+     "note": "1 = exactly one input high; odd = odd parity"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 10,
+     "negate_output": true
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "NOT of the XOR-gate function (same xor attribute). Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "Odd Parity",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/OddParityGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 0,
+     "negate_output": false
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "odd parity (XOR chain). Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "Even Parity",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/EvenParityGate.java + AbstractGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "50",
+     "values": [
+      "30",
+      "50",
+      "70"
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      2,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "negate{i}",
+     "type": "negate",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ],
+     "dynamic": "negate",
+     "note": "one per input, i = 0..inputs-1; true draws a bubble and moves that input 10 further out"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_abstract_gate",
+    "kwargs": {
+     "bonus_width": 0,
+     "negate_output": false
+    }
+   },
+   "offset_bounds": "AbstractGate.getOffsetBounds: inputsH = inputs (+1 if even); width = size + bonus + (10 if negated-output gate) + (10 if any negate bit); height = max(10*inputsH, size). EAST: (-width, -height/2, width, height); WEST: (0, -height/2, width, height); NORTH: (-height/2, 0, height, width); SOUTH: (-height/2, -width, height, width)",
+   "behaviour": "NOT(odd parity). Negated inputs (negateN=true) are inverted before the function. 'out' option then maps 1->Z (0Z) or 0->Z (Z1).",
+   "notes": [
+    "Ports: index 0 = output at (0,0); index i+1 = input i (AbstractGate.computePorts).",
+    "Unconnected inputs (no wire end / other component end at the input location) are IGNORED (AbstractGate.propagate: isPortConnected); if options gateUndefined=error any unconnected input makes the output E. No connected inputs -> output E.",
+    "Width attribute applies bitwise to all ports.",
+    "Input offsets are NOT a true rotation: input 0 is always at the most negative coordinate along the input edge (top for east/west, left for north/south)."
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "NOT Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/NotGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "30",
+     "values": [
+      "20",
+      "30"
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_not_gate",
+    "kwargs": {}
+   },
+   "offset_bounds": "size 30: EAST (-30,-9,30,18); size 20: EAST (-20,-9,20,18); rotated per facing",
+   "behaviour": "out = NOT in (X/E/unconnected -> E); then Buffer.repair (gateUndefined=error maps undefined bits to E) and 'out' pull option",
+   "notes": [
+    "ports[0]=out (0,0); ports[1]=in = (0,0).translate(facing, -size)"
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "Buffer",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/Buffer.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "out",
+     "type": "option",
+     "default": "01",
+     "values": [
+      "01",
+      "0Z",
+      "Z1"
+     ],
+     "note": "01 = normal; 0Z = drive 1 as floating (open-drain); Z1 = drive 0 as floating"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_buffer",
+    "kwargs": {}
+   },
+   "offset_bounds": "EAST (-20,-9,20,18)",
+   "behaviour": "out = in (Buffer.repair)",
+   "notes": [
+    "ports[0]=out (0,0); ports[1]=in = translate(facing,-20)"
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "Controlled Buffer",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/ControlledBuffer.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "control",
+     "type": "option",
+     "default": "right",
+     "values": [
+      "right",
+      "left"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_controlled",
+    "kwargs": {
+     "is_inverter": false
+    }
+   },
+   "offset_bounds": "w=20; EAST (-w,-10,w,20)",
+   "behaviour": "control=1: out=in; control=0: out floating (X); control X/E: out=E",
+   "notes": [
+    "ports: 0=out (0,0), 1=in, 2=control (1 bit)",
+    "d = max(boundsW, boundsH) - 20 (=0 for buffer); in = translate(reverse(facing), 20+d); control = translate(reverse(facing), 10+d, right) with right=-10 for control=right, +10 for left (Location.translate(dir,dist,right))",
+    "EAST default: in (-20,0), control (-10,10)"
+   ]
+  },
+  {
+   "library": "#Gates",
+   "name": "Controlled Inverter",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/gates/ControlledBuffer.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "size",
+     "type": "option",
+     "default": "30",
+     "values": [
+      "20",
+      "30"
+     ]
+    },
+    {
+     "name": "control",
+     "type": "option",
+     "default": "right",
+     "values": [
+      "right",
+      "left"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_controlled",
+    "kwargs": {
+     "is_inverter": true
+    }
+   },
+   "offset_bounds": "EAST (-w,-10,w,20)",
+   "behaviour": "control=1: out=NOT in; control=0: out floating; control X/E: out=E",
+   "notes": [
+    "w = 30 unless size=20 (then 20); d = w-20; EAST default (size 30): in (-30,0), control (-20,10)"
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Splitter",
+   "source": "reference/logisim-src/src/com/cburch/logisim/circuit/SplitterFactory.java, SplitterAttributes.java, SplitterParameters.java, Splitter.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "fanout",
+     "type": "int_range",
+     "default": "2",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "incoming",
+     "type": "bitwidth",
+     "default": "2",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "appear",
+     "type": "option",
+     "default": "left",
+     "values": [
+      "left",
+      "right",
+      "center",
+      "legacy"
+     ],
+     "version_default": {
+      "since": [
+       2,
+       6,
+       3,
+       202
+      ],
+      "new": "left",
+      "old": "legacy"
+     },
+     "note": "missing attr -> 'left' if <project source> >= 2.6.3.202 else 'legacy' (SplitterFactory.getDefaultAttributeValue)"
+    },
+    {
+     "name": "bit{i}",
+     "type": "splitter_bit",
+     "default": null,
+     "dynamic": "splitter_bits",
+     "note": "one per incoming bit i; value 'none' = bit not routed, 'k' = routed to split end k (0-based, k < fanout). Missing bitN -> end N (if N < fanout) else SplitterAttributes.computeDistribution default; see ports_splitter"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_splitter",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "Pure wiring: combined end (0,0) carries 'incoming' bits; bit i of the combined end is the same net-thread as the j-th routed bit of its split end (j = rank of i among bits routed to that end, in increasing i). Bidirectional, no delay.",
+   "notes": [
+    "Ports (Splitter ends): end 0 = combined at loc; split end k (k=0..fanout-1) at loc + (dx0 + k*ddx, dy0 + k*ddy).",
+    "EAST: dx0=20, ddx=0, ddy=10; dy0 = -10*fanout (left), 10 (right), -10*(fanout/2) (center/legacy).",
+    "WEST: dx0=-20, ddy=10; dy0 = 10 (left), -10*fanout (right), -10*(fanout/2) (center/legacy).",
+    "NORTH: dy0=-20, ddx=-10; dx0 = -10 (left), 10*fanout (right), 10*((fanout+1)/2 - 1) (center/legacy).",
+    "SOUTH: dy0=20, ddx=-10; dx0 = 10*fanout (left), -10 (right), 10*((fanout+1)/2 - 1) (center/legacy).",
+    "Width of split end k = number of bits i with bit_end[i] == k+1 (may be 0)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Pin",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Pin.java, PinAttributes.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "output",
+     "type": "bool",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "tristate",
+     "type": "bool",
+     "default": "true",
+     "values": [
+      "true",
+      "false"
+     ]
+    },
+    {
+     "name": "pull",
+     "type": "option",
+     "default": "none",
+     "values": [
+      "none",
+      "up",
+      "down"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelloc",
+     "type": "direction",
+     "default": "west",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_pin",
+    "kwargs": {}
+   },
+   "offset_bounds": "Probe.getOffsetBounds(facing, width, radix2): EAST 1-2 bits (-20,-10,20,20), grows with width",
+   "behaviour": "Input pin (output=false) drives its value (poked by user; initial value X if tristate=true else 0). Output pin (output=true) only observes. In a subcircuit, pins become the instance's ports.",
+   "notes": [
+    "Single port at (0,0) regardless of facing. Port type is OUTPUT for an input pin and INPUT for an output pin.",
+    "facing = side of the pin body on which the connection point lies (input pins usually east, output pins usually west)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Probe",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Probe.java, ProbeAttributes.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "radix",
+     "type": "option",
+     "default": "2",
+     "values": [
+      "2",
+      "8",
+      "10signed",
+      "10unsigned",
+      "16"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelloc",
+     "type": "direction",
+     "default": "west",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_probe",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "Displays the value at its point; drives nothing.",
+   "notes": [
+    "Single INPUT port at (0,0), width UNKNOWN (adapts)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Tunnel",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Tunnel.java, TunnelAttributes.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "west",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_tunnel",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "All tunnels in the SAME circuit with the same label.trim() (non-empty) are one net (CircuitWires.connectTunnels). Empty label -> connects to nothing but its own point. Width mismatch -> width error.",
+   "notes": [
+    "Single INOUT port at (0,0)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Pull Resistor",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/PullResistor.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "south",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "pull",
+     "type": "option",
+     "default": "0",
+     "values": [
+      "0",
+      "1",
+      "X"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_pull_resistor",
+    "kwargs": {}
+   },
+   "offset_bounds": "EAST (-42,-6,42,12); SOUTH (-6,-42,12,42) ...",
+   "behaviour": "Net-level: undriven (X) bits of the net it touches resolve to the pull value (CircuitWires.connectPullResistors/pullValue).",
+   "notes": [
+    "Single port at (0,0), width UNKNOWN."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Clock",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Clock.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "highDuration",
+     "type": "duration",
+     "default": "1",
+     "range": [
+      1,
+      2147483647
+     ]
+    },
+    {
+     "name": "lowDuration",
+     "type": "duration",
+     "default": "1",
+     "range": [
+      1,
+      2147483647
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelloc",
+     "type": "direction",
+     "default": "west",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_clock",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "Square wave, starts 0; highDuration/lowDuration in ticks.",
+   "notes": [
+    "Single OUTPUT port (0,0), 1 bit."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Constant",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Constant.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "value",
+     "type": "hex_int",
+     "default": "0x1",
+     "note": "HexIntegerAttribute: written as 0x..; parse also accepts 0b.., leading-0 octal, decimal"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_constant",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "Drives 'value' masked to width.",
+   "notes": [
+    "Single OUTPUT port (0,0).",
+    "Attribute order facing,width,value. Missing value -> 1 (factory default), even if width>1 (writer omits value only when it equals 1)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Power",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Power.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "north",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_power_ground",
+    "kwargs": {}
+   },
+   "offset_bounds": "Bounds(0,-8,15,16).rotate(EAST, facing)",
+   "behaviour": "Drives all-ones.",
+   "notes": [
+    "Single OUTPUT port (0,0)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Ground",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Ground.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "south",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_power_ground",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "Drives all-zeros.",
+   "notes": [
+    "Single OUTPUT port (0,0)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Transistor",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/Transistor.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "type",
+     "type": "option",
+     "default": "p",
+     "values": [
+      "p",
+      "n"
+     ]
+    },
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "gate",
+     "type": "option",
+     "default": "tl",
+     "values": [
+      "tl",
+      "br"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_transistor",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "gate == (p:0 / n:1): out = in; gate the other defined value: out = X (floating); gate undefined: E (or E where in defined).",
+   "notes": [
+    "ports 0=out (0,0) [source/drain output], 1=in at 40*(dx,dy), 2=gate (1 bit)",
+    "(dx,dy) = north (0,1), east (-1,0), south (0,-1), west (1,0); flip = (facing in {south,west}) == (gate==tl);",
+    "gate = flip ? (20(dx+dy), 20(-dx+dy)) : (20(dx-dy), 20(dx+dy)). EAST/tl: in (-40,0), gate (-20,-20)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Transmission Gate",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/TransmissionGate.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "gate",
+     "type": "option",
+     "default": "tl",
+     "values": [
+      "tl",
+      "br"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_transmission_gate",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "gate0/gate1 defined and different: gate0=0 (gate1=1) -> out = in; gate0=1 -> out floating; otherwise E.",
+   "notes": [
+    "ports 0=out (0,0), 1=in 40*(dx,dy), 2=gate0, 3=gate1 (see Transistor for dx,dy,flip);",
+    "not flipped: gate0=(20(dx-dy),20(dx+dy)), gate1=(20(dx+dy),20(-dx+dy)); flipped: swapped. EAST/tl: gate0 (-20,-20), gate1 (-20,20)."
+   ]
+  },
+  {
+   "library": "#Wiring",
+   "name": "Bit Extender",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/wiring/BitExtender.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "in_width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "out_width",
+     "type": "bitwidth",
+     "default": "16",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "type",
+     "type": "option",
+     "default": "zero",
+     "values": [
+      "zero",
+      "one",
+      "sign",
+      "input"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_bit_extender",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = in extended (or truncated) to out_width, filling with 0 / 1 / in's top bit / the 'extend' input.",
+   "notes": [
+    "No facing attribute in the attribute list (fixed geometry, bounds (-40,-20,40,40)).",
+    "ports 0=out (0,0) out_width, 1=in (-40,0) in_width, 2=extend (-20,-20) only when type=input."
+   ]
+  },
+  {
+   "library": "#Plexers",
+   "name": "Multiplexer",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/plexers/Multiplexer.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "selloc",
+     "type": "option",
+     "default": "bl",
+     "values": [
+      "bl",
+      "tr"
+     ]
+    },
+    {
+     "name": "select",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      5
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "disabled",
+     "type": "option",
+     "default": "Z",
+     "values": [
+      "Z",
+      "0"
+     ]
+    },
+    {
+     "name": "enable",
+     "type": "bool",
+     "default": "true",
+     "values": [
+      "true",
+      "false"
+     ],
+     "version_default": {
+      "since": [
+       2,
+       6,
+       3,
+       220
+      ],
+      "new": "true",
+      "old": "false"
+     },
+     "note": "missing attr -> true if <project source> >= 2.6.3.220 else false (getDefaultAttributeValue override)"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_multiplexer",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = in[select]; enable=0 -> out all Z (disabled=Z) or 0; select X -> X, E -> E. Delay 3.",
+   "notes": [
+    "Port order: in0..in(2^select-1), select, [enable], out (out last, at (0,0)).",
+    "enable port = select.translate(facing, +10)."
+   ]
+  },
+  {
+   "library": "#Plexers",
+   "name": "Demultiplexer",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/plexers/Demultiplexer.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "selloc",
+     "type": "option",
+     "default": "bl",
+     "values": [
+      "bl",
+      "tr"
+     ]
+    },
+    {
+     "name": "select",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      5
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "tristate",
+     "type": "bool",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ]
+    },
+    {
+     "name": "disabled",
+     "type": "option",
+     "default": "Z",
+     "values": [
+      "Z",
+      "0"
+     ]
+    },
+    {
+     "name": "enable",
+     "type": "bool",
+     "default": "true",
+     "values": [
+      "true",
+      "false"
+     ],
+     "version_default": {
+      "since": [
+       2,
+       6,
+       3,
+       220
+      ],
+      "new": "true",
+      "old": "false"
+     },
+     "note": "missing attr -> true if <project source> >= 2.6.3.220 else false (getDefaultAttributeValue override)"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_demultiplexer",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out[select] = in, other outputs 0 (tristate=false) or Z (tristate=true); enable=0 -> all outputs Z/0 per 'disabled'.",
+   "notes": [
+    "Port order: out0..out(n-1), select, [enable], in (in last, at (0,0)).",
+    "enable = select.translate(facing, -10)."
+   ]
+  },
+  {
+   "library": "#Plexers",
+   "name": "Decoder",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/plexers/Decoder.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "selloc",
+     "type": "option",
+     "default": "bl",
+     "values": [
+      "bl",
+      "tr"
+     ]
+    },
+    {
+     "name": "select",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      5
+     ]
+    },
+    {
+     "name": "tristate",
+     "type": "bool",
+     "default": "false",
+     "values": [
+      "true",
+      "false"
+     ]
+    },
+    {
+     "name": "disabled",
+     "type": "option",
+     "default": "Z",
+     "values": [
+      "Z",
+      "0"
+     ]
+    },
+    {
+     "name": "enable",
+     "type": "bool",
+     "default": "true",
+     "values": [
+      "true",
+      "false"
+     ],
+     "version_default": {
+      "since": [
+       2,
+       6,
+       3,
+       220
+      ],
+      "new": "true",
+      "old": "false"
+     },
+     "note": "missing attr -> true if <project source> >= 2.6.3.220 else false (getDefaultAttributeValue override)"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_decoder",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out[select]=1, others 0 (or Z if tristate).",
+   "notes": [
+    "Port order: out0..out(n-1), select (at (0,0)), [enable at (0,0).translate(facing,-10)]."
+   ]
+  },
+  {
+   "library": "#Plexers",
+   "name": "Priority Encoder",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/plexers/PriorityEncoder.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "select",
+     "type": "bitwidth",
+     "default": "3",
+     "range": [
+      1,
+      5
+     ]
+    },
+    {
+     "name": "disabled",
+     "type": "option",
+     "default": "Z",
+     "values": [
+      "Z",
+      "0"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_priority_encoder",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = highest index i with in_i=1; group_signal=1 if any; enable_out=1 if enabled and none set; enable_in=0 disables (out Z/0).",
+   "notes": [
+    "Port order: in0..in(n-1), out (0,0), enable_in, enable_out, group_signal (n = 2^select). No selloc attribute."
+   ]
+  },
+  {
+   "library": "#Plexers",
+   "name": "BitSelector",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/plexers/BitSelector.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "group",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_bit_selector",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = bits [sel*group, sel*group+group) of in (missing high bits = 0).",
+   "notes": [
+    "Port order: out (0,0), in, select. select width = smallest s>=1 with 2^s >= ceil(width/group)."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "Adder",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/Adder.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_adder",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = a + b + carry_in (low bits), carry_out = overflow. carry_in unconnected = 0",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted.",
+    "Adder.java declares carry_out (port 4) as Port.INPUT (source quirk) although propagate() drives it."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "Subtractor",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/Subtractor.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_subtractor",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = a - b - borrow_in; borrow_out",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "Multiplier",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/Multiplier.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_multiplier",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = low bits of a*b + carry_in; carry_out = high bits",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "Divider",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/Divider.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_divider",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "quotient = (upper:lower)/divisor, remainder",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "Negator",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/Negator.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_negator",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = -in (two's complement)",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "Comparator",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/Comparator.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "mode",
+     "type": "option",
+     "default": "twosComplement",
+     "values": [
+      "twosComplement",
+      "unsigned"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_comparator",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "gt/eq/lt of a vs b",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "Shifter",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/Shifter.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "shift",
+     "type": "option",
+     "default": "ll",
+     "values": [
+      "ll",
+      "lr",
+      "ar",
+      "rl",
+      "rr"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_shifter",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = data shifted by dist (logical left/right, arithmetic right, rotate left/right)",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "BitAdder",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/BitAdder.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "inputs",
+     "type": "int_range",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_bit_adder",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "out = number of 1 bits among all inputs",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Arithmetic",
+   "name": "BitFinder",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/arith/BitFinder.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "type",
+     "type": "option",
+     "default": "low1",
+     "values": [
+      "low1",
+      "high1",
+      "low0",
+      "high0"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_bit_finder",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "index of lowest/highest 1/0 bit; present=1 if found",
+   "notes": [
+    "No facing attribute: geometry fixed, location = right edge (output side); bounds (-40,-20,40,40) unless noted."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "D Flip-Flop",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/DFlipFlop.java + AbstractFlipFlop.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling",
+      "high",
+      "low"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_flip_flop",
+    "kwargs": {
+     "input_names": [
+      "d"
+     ]
+    }
+   },
+   "offset_bounds": null,
+   "behaviour": "on trigger: q = d (only if d is 0/1). Default trigger rising edge.",
+   "notes": [
+    "No facing. Bounds (-40,-10,40,40). Port order: data inputs, clock, q (0,0), nq (0,20), reset (-10,30), preset (-30,30), enable (-20,30).",
+    "reset=1 forces 0, else preset=1 forces 1 (asynchronous); enable=0 blocks clocked update (unconnected enable counts as enabled).",
+    "1-input FFs (D,T): ps[0]=data at (-40,20), ps[1]=clock at (-40,0) (verbatim from AbstractFlipFlop constructor: clock is ABOVE the data input). 2-input (J-K,S-R): in0 (-40,0), in1 (-40,20), clock (-40,10)."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "T Flip-Flop",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/TFlipFlop.java + AbstractFlipFlop.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_flip_flop",
+    "kwargs": {
+     "input_names": [
+      "t"
+     ]
+    }
+   },
+   "offset_bounds": null,
+   "behaviour": "on edge: t=1 toggles. Default rising.",
+   "notes": [
+    "No facing. Bounds (-40,-10,40,40). Port order: data inputs, clock, q (0,0), nq (0,20), reset (-10,30), preset (-30,30), enable (-20,30).",
+    "reset=1 forces 0, else preset=1 forces 1 (asynchronous); enable=0 blocks clocked update (unconnected enable counts as enabled).",
+    "1-input FFs (D,T): ps[0]=data at (-40,20), ps[1]=clock at (-40,0) (verbatim from AbstractFlipFlop constructor: clock is ABOVE the data input). 2-input (J-K,S-R): in0 (-40,0), in1 (-40,20), clock (-40,10)."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "J-K Flip-Flop",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/JKFlipFlop.java + AbstractFlipFlop.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_flip_flop",
+    "kwargs": {
+     "input_names": [
+      "j",
+      "k"
+     ]
+    }
+   },
+   "offset_bounds": null,
+   "behaviour": "on edge: 00 hold, 01 reset, 10 set, 11 toggle. Default rising.",
+   "notes": [
+    "No facing. Bounds (-40,-10,40,40). Port order: data inputs, clock, q (0,0), nq (0,20), reset (-10,30), preset (-30,30), enable (-20,30).",
+    "reset=1 forces 0, else preset=1 forces 1 (asynchronous); enable=0 blocks clocked update (unconnected enable counts as enabled).",
+    "1-input FFs (D,T): ps[0]=data at (-40,20), ps[1]=clock at (-40,0) (verbatim from AbstractFlipFlop constructor: clock is ABOVE the data input). 2-input (J-K,S-R): in0 (-40,0), in1 (-40,20), clock (-40,10)."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "S-R Flip-Flop",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/SRFlipFlop.java + AbstractFlipFlop.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling",
+      "high",
+      "low"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_flip_flop",
+    "kwargs": {
+     "input_names": [
+      "s",
+      "r"
+     ]
+    }
+   },
+   "offset_bounds": null,
+   "behaviour": "on trigger: 00 hold, 01 ->0, 10 ->1, 11 -> E (ignored, state kept). Default rising.",
+   "notes": [
+    "No facing. Bounds (-40,-10,40,40). Port order: data inputs, clock, q (0,0), nq (0,20), reset (-10,30), preset (-30,30), enable (-20,30).",
+    "reset=1 forces 0, else preset=1 forces 1 (asynchronous); enable=0 blocks clocked update (unconnected enable counts as enabled).",
+    "1-input FFs (D,T): ps[0]=data at (-40,20), ps[1]=clock at (-40,0) (verbatim from AbstractFlipFlop constructor: clock is ABOVE the data input). 2-input (J-K,S-R): in0 (-40,0), in1 (-40,20), clock (-40,10)."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "Register",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/Register.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling",
+      "high",
+      "low"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_register",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "clear=1 -> 0 (async); on trigger and enable!=0: q = d (if fully defined).",
+   "notes": [
+    "No facing; bounds (-30,-20,30,40). Order: q, d, clock, clear, enable."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "Counter",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/Counter.java, CounterAttributes.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "max",
+     "type": "hex_int",
+     "default": "0xff",
+     "note": "masked to width; when width is set larger the max becomes the full mask, but a missing 'max' then resets it to 0xff & mask"
+    },
+    {
+     "name": "ongoal",
+     "type": "option",
+     "default": "wrap",
+     "values": [
+      "wrap",
+      "stay",
+      "continue",
+      "load"
+     ]
+    },
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_counter",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "count up (load=0,count=1) / down (load=1,count=1) / load d (load=1,count=0); carry at goal.",
+   "notes": [
+    "No facing; bounds (-30,-20,30,40). Order: q, d, clock, clear, load, count, carry."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "Shift Register",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/ShiftRegister.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "1",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "length",
+     "type": "int_range",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "parallel",
+     "type": "bool",
+     "default": "true",
+     "values": [
+      "true",
+      "false"
+     ]
+    },
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_shift_register",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "on edge with shift!=0: shift in; load=1 (parallel) loads d_i.",
+   "notes": [
+    "No facing; location is the LEFT edge. Bounds (0,-20, parallel ? 20+10*length : 30, 40).",
+    "Order: in(0), shift(1), clock(2), clear(3), out(4), [load(5), then d_i (6+2i), q_i (7+2i)]."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "Random",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/Random.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "width",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "seed",
+     "type": "int",
+     "default": "0"
+    },
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_random",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "pseudo-random sequence (LCG) advanced on edge when next!=0; reset reseeds.",
+   "notes": [
+    "No facing; bounds (-30,-20,30,40)."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "RAM",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/Ram.java + Mem.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "addrWidth",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      2,
+      24
+     ]
+    },
+    {
+     "name": "dataWidth",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "bus",
+     "type": "option",
+     "default": "combined",
+     "values": [
+      "combined",
+      "asynch",
+      "separate"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_ram",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "RAM; combined/asynch: data port bidirectional; separate: din + we.",
+   "notes": [
+    "No facing; bounds (-140,-40,140,80). Order: data, addr, cs, oe, clear, [clock unless asynch], [we, din if separate]."
+   ]
+  },
+  {
+   "library": "#Memory",
+   "name": "ROM",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/memory/Rom.java + Mem.java, RomAttributes.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "addrWidth",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      2,
+      24
+     ]
+    },
+    {
+     "name": "dataWidth",
+     "type": "bitwidth",
+     "default": "8",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "contents",
+     "type": "rom_contents",
+     "default": "addr/data: 8 8\n",
+     "note": "text content of <a>: first line 'addr/data: A D', then hex words, 'N*v' = run of N copies, trailing zeros omitted (HexFile.save)"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_rom",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "data = contents[addr] when cs != 0, else Z.",
+   "notes": [
+    "No facing; bounds (-140,-40,140,80). Order: data, addr, cs."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "Button",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/Button.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "east",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "color",
+     "type": "color",
+     "default": "#ffffff"
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelloc",
+     "type": "option",
+     "default": "center",
+     "values": [
+      "center",
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "labelcolor",
+     "type": "color",
+     "default": "#000000"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_button",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "1 while pressed, else 0.",
+   "notes": [
+    "Port (0,0) regardless of facing; bounds (-20,-10,20,20).rotate(EAST,facing)."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "Joystick",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/Joystick.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "bits",
+     "type": "bitwidth",
+     "default": "4",
+     "range": [
+      2,
+      5
+     ]
+    },
+    {
+     "name": "color",
+     "type": "color",
+     "default": "#ff0000"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_joystick",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "x,y position outputs.",
+   "notes": [
+    "No facing; bounds (-30,-10,30,30)."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "Keyboard",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/Keyboard.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "buflen",
+     "type": "int_range",
+     "default": "32",
+     "range": [
+      1,
+      256
+     ]
+    },
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_keyboard",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "7-bit ASCII buffer.",
+   "notes": [
+    "No facing; bounds (0,-15,145,25). Order: clear, clock, read_enable, available, data."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "LED",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/Led.java",
+   "facing_attribute": "facing",
+   "attributes": [
+    {
+     "name": "facing",
+     "type": "direction",
+     "default": "west",
+     "values": [
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "color",
+     "type": "color",
+     "default": "#f00000"
+    },
+    {
+     "name": "offcolor",
+     "type": "color",
+     "default": "#404040"
+    },
+    {
+     "name": "active",
+     "type": "bool",
+     "default": "true",
+     "values": [
+      "true",
+      "false"
+     ]
+    },
+    {
+     "name": "label",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "labelloc",
+     "type": "option",
+     "default": "center",
+     "values": [
+      "center",
+      "north",
+      "south",
+      "east",
+      "west"
+     ]
+    },
+    {
+     "name": "labelfont",
+     "type": "font",
+     "default": "SansSerif plain 12",
+     "note": "Font.decode syntax: 'Family style size'"
+    },
+    {
+     "name": "labelcolor",
+     "type": "color",
+     "default": "#000000"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_led",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "lit when input == active.",
+   "notes": [
+    "Port (0,0) regardless of facing; bounds (0,-10,20,20).rotate(WEST,facing)."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "7-Segment Display",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/SevenSegment.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "color",
+     "type": "color",
+     "default": "#f00000"
+    },
+    {
+     "name": "offcolor",
+     "type": "color",
+     "default": "#dcdcdc"
+    },
+    {
+     "name": "bg",
+     "type": "color",
+     "default": "#ffffff00"
+    },
+    {
+     "name": "active",
+     "type": "bool",
+     "default": "true",
+     "values": [
+      "true",
+      "false"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_seven_segment",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "segment inputs a..g, dp.",
+   "notes": [
+    "No facing; bounds (-5,0,40,60). Ports top row y=0, bottom row y=60."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "Hex Digit Display",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/HexDigit.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "color",
+     "type": "color",
+     "default": "#f00000"
+    },
+    {
+     "name": "offcolor",
+     "type": "color",
+     "default": "#dcdcdc"
+    },
+    {
+     "name": "bg",
+     "type": "color",
+     "default": "#ffffff00"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_hex_digit",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "shows 4-bit hex digit.",
+   "notes": [
+    "No facing; bounds (-15,-60,40,60)."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "DotMatrix",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/DotMatrix.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "inputtype",
+     "type": "option",
+     "default": "column",
+     "values": [
+      "column",
+      "row",
+      "select"
+     ]
+    },
+    {
+     "name": "matrixcols",
+     "type": "int_range",
+     "default": "5",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "matrixrows",
+     "type": "int_range",
+     "default": "7",
+     "range": [
+      1,
+      32
+     ]
+    },
+    {
+     "name": "color",
+     "type": "color",
+     "default": "#00ff00"
+    },
+    {
+     "name": "offcolor",
+     "type": "color",
+     "default": "#404040"
+    },
+    {
+     "name": "persist",
+     "type": "duration",
+     "default": "0",
+     "range": [
+      0,
+      2147483647
+     ]
+    },
+    {
+     "name": "dotshape",
+     "type": "option",
+     "default": "square",
+     "values": [
+      "circle",
+      "square"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_dot_matrix",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "LED matrix.",
+   "notes": [
+    "No facing."
+   ]
+  },
+  {
+   "library": "#I/O",
+   "name": "TTY",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/io/Tty.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "rows",
+     "type": "int_range",
+     "default": "8",
+     "range": [
+      1,
+      48
+     ]
+    },
+    {
+     "name": "cols",
+     "type": "int_range",
+     "default": "32",
+     "range": [
+      1,
+      120
+     ]
+    },
+    {
+     "name": "trigger",
+     "type": "option",
+     "default": "rising",
+     "values": [
+      "rising",
+      "falling"
+     ]
+    },
+    {
+     "name": "color",
+     "type": "color",
+     "default": "#000000"
+    },
+    {
+     "name": "bg",
+     "type": "color",
+     "default": "#00000040"
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_tty",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "text terminal.",
+   "notes": [
+    "No facing. Order: clear, clock, write_enable, data."
+   ]
+  },
+  {
+   "library": "#Base",
+   "name": "Text",
+   "source": "reference/logisim-src/src/com/cburch/logisim/std/base/Text.java, TextAttributes.java",
+   "facing_attribute": null,
+   "attributes": [
+    {
+     "name": "text",
+     "type": "string",
+     "default": ""
+    },
+    {
+     "name": "font",
+     "type": "font",
+     "default": "SansSerif plain 12"
+    },
+    {
+     "name": "halign",
+     "type": "option",
+     "default": "center",
+     "values": [
+      "left",
+      "right",
+      "center"
+     ]
+    },
+    {
+     "name": "valign",
+     "type": "option",
+     "default": "base",
+     "values": [
+      "top",
+      "base",
+      "bottom",
+      "center"
+     ]
+    }
+   ],
+   "ports_algorithm": {
+    "function": "ports_none",
+    "kwargs": {}
+   },
+   "offset_bounds": null,
+   "behaviour": "Annotation only; no ports, no electrical effect.",
+   "notes": []
+  }
+ ],
+ "subcircuit": {
+  "xml": "<comp name=\"<circuit name>\" loc=\"(x,y)\"> with NO lib attribute (lib absent/empty = this file)",
+  "attributes": [
+   {
+    "name": "facing",
+    "type": "direction",
+    "default": null,
+    "values": [
+     "north",
+     "south",
+     "east",
+     "west"
+    ],
+    "note": "missing -> facing of the subcircuit appearance's anchor (east for default appearance)"
+   },
+   {
+    "name": "label",
+    "type": "string",
+    "default": ""
+   },
+   {
+    "name": "labelloc",
+    "type": "direction",
+    "default": "north",
+    "values": [
+     "north",
+     "south",
+     "east",
+     "west"
+    ]
+   },
+   {
+    "name": "labelfont",
+    "type": "font",
+    "default": "SansSerif plain 12",
+    "note": "Font.decode syntax: 'Family style size'"
+   }
+  ],
+  "ports_algorithm": {
+   "function": "ports_subcircuit",
+   "needs": "pins of the referenced circuit and its <appear> (if any)"
+  },
+  "notes": [
+   "Every Pin of the subcircuit becomes a port; input pin -> INPUT port, output pin -> OUTPUT port; width = pin width.",
+   "Default appearance (no <appear>): DefaultAppearance.build; pin goes to edge reverse(pin.facing); anchor (= instance loc) on first east-edge pin, else north, west, south, else box corner.",
+   "Custom appearance: <circ-port pin=\"x,y\" x y width height> centre = port offset; <circ-anchor x y width height facing> centre = instance loc.",
+   "Instance facing != anchor facing -> offsets rotated by Location.rotate(anchorFacing, facing, 0, 0)."
+  ]
+ },
+ "wires": {
+  "xml": "<wire from=\"(x0,y0)\" to=\"(x1,y1)\"/> (always axis-parallel in files written by Logisim)",
+  "connectivity": [
+   "After loading, WireRepair (run by CircuitTransaction.execute for every circuit) merges collinear wires and SPLITS every wire at every point of the circuit's point map (any wire endpoint or any component port location) that lies strictly inside the wire (Wire.contains: on the segment, +-2 px perpendicular tolerance). Net effect: a wire is electrically connected to every wire endpoint and every component port lying anywhere on its closed segment (endpoints or interior).",
+   "Two wires that merely CROSS (no endpoint of either on the other) are NOT connected.",
+   "Overlapping collinear wires become one net (doOverlaps).",
+   "Component ports at the same location are connected even without any wire (CircuitWires.propagate: unwired points).",
+   "Tunnels with equal trimmed non-empty label in the same circuit are one net; splitters connect bit threads between their ends.",
+   "Zero-length wires are discarded (Circuit.mutatorAdd); duplicate wires are de-duplicated."
+  ]
+ }
+}
