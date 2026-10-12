@@ -13,13 +13,13 @@ from typing import Any
 from logilens.core.logic_types import KMapView
 from logilens.kmap.render_text import legend_lines
 
-GROUP_COLORS = {
-    "red": "#e5484d", "green": "#30a46c", "blue": "#3e63dd", "magenta": "#d6409f", "cyan": "#0894b3",
-    "yellow": "#c99a00", "bright_red": "#ff6b6b", "bright_green": "#2fbf71", "bright_blue": "#4c8dff",
-    "bright_magenta": "#b65bd6", "bright_cyan": "#14b8c4", "dark_orange": "#e8730c", "purple": "#7c3aed",
-    "spring_green3": "#12a37f", "deep_pink3": "#c2185b", "gold3": "#b8860b",
+GROUP_COLORS = {  # muted, print-friendly hues (Tableau 10 family) that stay apart on light and dark paper
+    "red": "#d62728", "green": "#2ca02c", "blue": "#1f77b4", "magenta": "#c2459b", "cyan": "#17a2b8",
+    "yellow": "#bcbd22", "bright_red": "#e45756", "bright_green": "#54a24b", "bright_blue": "#4c78a8",
+    "bright_magenta": "#b279a2", "bright_cyan": "#72b7b2", "dark_orange": "#ff7f0e", "purple": "#9467bd",
+    "spring_green3": "#2f9e8f", "deep_pink3": "#d6336c", "gold3": "#b8860b",
 }
-FALLBACK_COLOR = "#7c3aed"
+FALLBACK_COLOR = "#8c564b"
 FONT = 'font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"'
 
 
@@ -62,11 +62,11 @@ def kmap_svg(view: KMapView, cell: int = 46) -> str:
         y = top - 26 - k * bar_gap
         for a, b in _runs(idx):
             x0, x1 = left + a * cell + 4, left + (b + 1) * cell - 4
-            e.append(f'<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" stroke="var(--accent)" stroke-width="3" '
+            e.append(f'<line x1="{x0}" y1="{y}" x2="{x1}" y2="{y}" stroke="var(--ink)" stroke-width="2" '
                      'stroke-linecap="round"/>')
         x_label = left + _runs(idx)[0][0] * cell - 2 if idx else left - 6
         e.append(f'<text x="{x_label}" y="{y + 4}" text-anchor="end" font-size="12" font-style="italic" '
-                 f'fill="var(--accent)">{escape(var)}</text>')
+                 f'fill="var(--ink)">{escape(var)}</text>')
     # row codes and bars
     for r, code in enumerate(view.row_codes):
         y = top + r * cell + cell / 2 + 4
@@ -76,11 +76,11 @@ def kmap_svg(view: KMapView, cell: int = 46) -> str:
         x = left - 34 - 8 * len(view.row_vars) + 8 - k * bar_gap
         for a, b in _runs(idx):
             y0, y1 = top + a * cell + 4, top + (b + 1) * cell - 4
-            e.append(f'<line x1="{x}" y1="{y0}" x2="{x}" y2="{y1}" stroke="var(--accent)" stroke-width="3" '
+            e.append(f'<line x1="{x}" y1="{y0}" x2="{x}" y2="{y1}" stroke="var(--ink)" stroke-width="2" '
                      'stroke-linecap="round"/>')
         y_label = top + (_runs(idx)[-1][1] + 1) * cell + 14 if idx else top + nrows * cell + 14
         e.append(f'<text x="{x}" y="{y_label}" text-anchor="middle" font-size="12" font-style="italic" '
-                 f'fill="var(--accent)">{escape(var)}</text>')
+                 f'fill="var(--ink)">{escape(var)}</text>')
 
     # group fills under the grid, outlines over it
     fills, outlines = [], []
@@ -90,7 +90,7 @@ def kmap_svg(view: KMapView, cell: int = 46) -> str:
         for r0, c0, r1, c1 in g.rects:
             x, y = left + c0 * cell + inset, top + r0 * cell + inset
             w, h = (c1 - c0 + 1) * cell - 2 * inset, (r1 - r0 + 1) * cell - 2 * inset
-            fills.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" fill="{color}" fill-opacity=".10"/>')
+            fills.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" fill="{color}" fill-opacity=".07"/>')
             outlines.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" fill="none" stroke="{color}" '
                             'stroke-width="2.2"/>')
     e += fills
@@ -116,7 +116,7 @@ def kmap_svg(view: KMapView, cell: int = 46) -> str:
     e += outlines
 
     legend = "".join(
-        f'<li><span style="background:{group_color(g.color)}"></span>{escape(line)}</li>'
+        f'<li><span style="color:{group_color(g.color)}"></span>{escape(line)}</li>'
         for g, line in zip(view.groups, legend_lines(view, "ascii")))
     svg = (f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img" '
            f'aria-label="Karnaugh map of {escape(view.output)}">{"".join(e)}</svg>')

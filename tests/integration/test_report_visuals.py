@@ -15,7 +15,7 @@ def test_html_report_draws_kmaps_as_svg(cli: Cli, tmp_path: Path) -> None:
     cli(*PY, "--lang", "en", "report", CONVERTER, "--spec", SPEC, "-f", "html", "-o", str(out), "--no-image")
     html = out.read_text(encoding="utf-8")
     assert html.count('<figure class="kmap"><svg') >= 8
-    assert '<nav class="top">' in html and 'class="tiles"' in html
+    assert '<aside class="toc">' in html and 'class="facts"' in html
     assert "━━" not in html  # no text-art bars left over
 
 
