@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "logilens"
+dynamic = ["version"]
+description = "Terminal analyzer for Logisim circuits: lint, truth tables, Karnaugh maps, minimization, FSMs, reports."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE", "third_party/espresso/LICENSE"]
+keywords = ["logisim", "digital logic", "karnaugh map", "logic minimization", "espresso", "fsm", "nand", "nor"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Environment :: Console",
+  "Intended Audience :: Education",
+  "Natural Language :: Russian",
+  "Natural Language :: English",
+  "Natural Language :: Slovak",
+  "Topic :: Education",
+  "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+authors = [{ name = "xoliinykb" }]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13",
+  "textual>=0.80",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "platformdirs>=4",
+]
+
+[project.urls]
+Homepage = "https://github.com/xoliinykb-stack/logilens"
+Documentation = "https://github.com/xoliinykb-stack/logilens/blob/main/docs/USAGE.md"
+Releases = "https://github.com/xoliinykb-stack/logilens/releases"
+Issues = "https://github.com/xoliinykb-stack/logilens/issues"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+logilens = "logilens.cli.app:main"
+
+[tool.hatch.version]
+path = "src/logilens/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/logilens"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"java/LogisimBridge.java" = "logilens/backends/java/LogisimBridge.java"
+"third_party/espresso/espresso-src" = "logilens/_vendor/espresso-src"
+"third_party/espresso/LICENSE" = "logilens/_vendor/espresso-LICENSE"
+
+[tool.hatch.build.targets.sdist]
+# An explicit list, so local editor and tool directories never end up in the release tarball.
+only-include = ["src", "tests", "java", "third_party", "examples", "docs", "scripts", "packaging",
+                "README.md", "README.ru.md", "LICENSE", "SECURITY.md", "Makefile", "pyproject.toml"]
+exclude = ["third_party/espresso/bin/", "*.o"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "java: needs a local Java + Logisim jar (skipped otherwise)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"

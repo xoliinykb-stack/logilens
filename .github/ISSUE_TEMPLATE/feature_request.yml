@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a new check, report or command
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task, and where logilens falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should logilens do?
+      description: An example command and the output you'd expect helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: circ
+    attributes:
+      label: Example circuit
+      description: Attach a .circ that shows the case, if you have one.

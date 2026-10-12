@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python -m pip install ruff
+      - run: ruff check src tests
+
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m pip install -e '.[dev]'
+      # tests marked `java` skip here: there is no Logisim jar on this leg
+      - run: python -m pytest -q -rs
+      - run: logilens --version
+
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - run: python -m pip install -e '.[dev]'
+      - name: Cache the Logisim jar
+        id: jar-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/logisim-2.7.1
+          key: logisim-2.7.1-362a78c12ad18c20
+      - name: Fetch Logisim 2.7.1
+        if: steps.jar-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/logisim-2.7.1
+          curl -fsSL --retry 3 -o ~/logisim-2.7.1/logisim.jar \
+            https://downloads.sourceforge.net/project/circuit/2.7.x/2.7.1/logisim-generic-2.7.1.jar
+      - name: Verify the jar
+        run: echo "362a78c12ad18c203fed868872c4a01cd9c12141379d92e892bbe2c37e627bc2  $HOME/logisim-2.7.1/logisim.jar" | sha256sum -c -
+      - name: Java tests
+        run: |
+          export LOGISIM_JAR="$HOME/logisim-2.7.1/logisim.jar"
+          logilens --backend java parse examples/converter_nand_nor.circ  # fails if Java or the jar is missing
+          python -m pytest -q -rs -m java

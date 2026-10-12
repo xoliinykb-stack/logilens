@@ -1,0 +1,253 @@
+/* logilens TUI — theme variables only, so dark and light themes both work. */
+
+Screen {
+    background: $background;
+}
+
+/* ------------------------------------------------------------------ picker */
+
+#picker-title {
+    height: 3;
+    padding: 1 2 0 2;
+}
+
+#picker-body {
+    height: 1fr;
+    padding: 0 1;
+}
+
+.card {
+    border: round $primary 60%;
+    border-title-color: $primary;
+    border-title-style: bold;
+    padding: 0 1;
+    height: 1fr;
+}
+
+.card:focus-within {
+    border: round $accent;
+    border-title-color: $accent;
+}
+
+#recent-pane {
+    width: 2fr;
+    margin-right: 1;
+}
+
+#browse-pane {
+    width: 3fr;
+}
+
+#recent-list {
+    height: 1fr;
+    border: none;
+    background: transparent;
+}
+
+#recent-empty {
+    padding: 1 1;
+}
+
+#filter {
+    margin-bottom: 1;
+}
+
+#tree {
+    height: 1fr;
+    background: transparent;
+}
+
+#picker-bottom {
+    height: 3;
+    padding: 0 1;
+}
+
+#spec {
+    width: 1fr;
+    margin-right: 1;
+}
+
+/* ------------------------------------------------------------------ main screen */
+
+#topbar {
+    height: 1;
+    background: $panel;
+}
+
+#brand {
+    width: auto;
+    padding: 0 1;
+    background: $accent;
+    color: $text;
+    text-style: bold;
+}
+
+#file-info {
+    width: 1fr;
+    padding: 0 1;
+}
+
+#lint-badge, #verdict-badge {
+    width: auto;
+    margin-left: 1;
+}
+
+#main-content {
+    height: 1fr;
+}
+
+#tabs {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 1 1 0 1;
+}
+
+.pane-scroll {
+    height: 1fr;
+}
+
+#overview-body, #minimize-body, #kmap-body, #fsm-body {
+    height: auto;
+}
+
+#error-panel {
+    display: none;
+    height: 1fr;
+    padding: 1 2;
+}
+
+.controls {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.control-label {
+    width: auto;
+    padding: 1 1 0 0;
+    color: $text-muted;
+}
+
+.empty-state {
+    padding: 1 2;
+    color: $success;
+    text-style: bold;
+}
+
+/* issues */
+#gate-set {
+    width: 30;
+}
+
+#issues-count {
+    width: 1fr;
+    padding: 1 0 0 2;
+}
+
+#issues-table {
+    height: 1fr;
+}
+
+#issue-detail {
+    height: auto;
+    max-height: 9;
+    margin-top: 1;
+    padding: 0 1;
+    border: round $primary 60%;
+}
+
+/* truth table */
+#truth-info {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#truth-table {
+    height: 1fr;
+}
+
+/* k-maps */
+#kmap-output {
+    width: 30;
+}
+
+#kmap-form {
+    layout: horizontal;
+    width: auto;
+    height: auto;
+    border: none;
+    background: transparent;
+    padding: 0;
+    margin-top: 1;
+}
+
+#kmap-form RadioButton {
+    width: auto;
+    margin-right: 1;
+}
+
+/* fsm */
+#fsm-view {
+    height: 1fr;
+}
+
+#timing-title {
+    margin-top: 1;
+}
+
+#timing-controls {
+    height: auto;
+    margin: 1 0;
+}
+
+#timing-input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#timing-body {
+    height: auto;
+    margin-bottom: 1;
+}
+
+/* export */
+#export-hint {
+    margin-bottom: 1;
+}
+
+#export-buttons {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#export-buttons Button {
+    margin-right: 1;
+}
+
+#export-log {
+    height: auto;
+}
+
+/* ------------------------------------------------------------------ help */
+
+HelpScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#help-box {
+    width: 92;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    background: $surface;
+    border: thick $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
+}
+
+#help-body {
+    height: auto;
+}

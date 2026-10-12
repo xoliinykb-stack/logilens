@@ -1,0 +1,44 @@
+name: Bug report
+description: logilens crashed, gave a wrong answer, or the TUI misbehaved
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, check [Troubleshooting](https://github.com/xoliinykb-stack/logilens/blob/main/docs/TROUBLESHOOTING.md) and existing issues.
+  - type: input
+    id: version
+    attributes:
+      label: logilens version
+      description: Output of `logilens --version`
+      placeholder: logilens 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `logilens doctor`
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options: [Homebrew, scripts/install.sh, pipx / pip, from a git checkout]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: The command you ran, what you expected, and what you got. Paste tracebacks in full.
+    validations:
+      required: true
+  - type: textarea
+    id: circ
+    attributes:
+      label: The .circ file
+      description: |
+        Attach the file (zip it if GitHub refuses the extension) or a smaller one that shows the same problem.
+        If the circuit is private, describe it instead.
